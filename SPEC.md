@@ -49,7 +49,7 @@ Database: AuditEvent table is append-only (triggers reject UPDATE/DELETE)
 ## 4. Rules for all code
 
 - **SECURITY.md overrides this document.** If anything conflicts, follow SECURITY.md.
-- **Build only what this spec lists.** Do not implement stretch items or extra features. In particular, the approvals engine supports exactly **one** decider per request.
+- **Build only what this spec lists.** Do not implement stretch items or extra features. In particular: the approvals engine supports exactly **one** decider per request, with no multi-step or multi-approver logic; there is no audit hash chain; there is no SSO/OIDC.
 - Server-side enforcement only; hiding things in the UI is cosmetic.
 - Simple, readable code. A reviewer new to the codebase should understand the platform in 15 minutes.
 - External systems are reached only through `src/connectors/*` (none are needed for KYC).
@@ -90,6 +90,9 @@ tests/
   security/          RESERVED for independent security tests. Do not create or edit files here.
 docs/
   ADDING_AN_APP.md   step-by-step guide to building a new app on the platform
+  build-log/         one short report file per Devin session (see section 13)
+.github/workflows/
+  ci.yml             lint, typecheck, unit tests and security tests on every PR
 ```
 
 ## 7. Platform modules
@@ -188,6 +191,8 @@ Status codes: 400 invalid input, 401 unauthenticated, 403 not permitted, 404 not
 - `npm test`, `npm run lint`, `npm run typecheck` pass. `npm run test:security` is wired up and runs.
 - README: how to run; the section 2 diagram; a **demo walkthrough** showing each control (login, record-level access, PII masking and reveal, maker-checker in the approvals inbox, audit log and append-only protection); a "Production path" section.
 - `docs/ADDING_AN_APP.md`: a precise, step-by-step guide to adding a new app using only platform building blocks (declare permissions, write `visibleWhere`, add PII field names, register approval actions, wrap routes in `secureHandler`, reuse UI components, add unit tests). This document becomes the basis for building every future app.
+- `.github/workflows/ci.yml`: runs `npm run lint`, `npm run typecheck`, `npm test` and `npm run test:security` on every pull request.
+- `docs/build-log/`: at the end of every Devin session, add a new file named after the session (e.g. `docs/build-log/A-platform-kyc.md`) with: session name, task, start and end time, decisions made without asking, every user message that corrected or clarified the work, and test results. Leave a line `ACUs used: (to be added)`; the human fills it in from the usage dashboard. Never edit another session's file.
 
 ## 14. Out of scope (list in README under "Production path")
 
