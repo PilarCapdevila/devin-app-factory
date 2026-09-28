@@ -10,6 +10,10 @@ export type DueState = (typeof DUE_STATES)[number];
 /** Disputes whose response deadline is within this window are flagged as due soon. */
 export const DUE_SOON_HOURS = 72;
 
+/** Evidence summary length bounds for a proposal (required when fighting). */
+export const MIN_EVIDENCE_LENGTH = 20;
+export const MAX_EVIDENCE_LENGTH = 4000;
+
 /** The dispute PII fields; the only ones the reveal route accepts. `cardLast4` is deliberately not PII. */
 export const DISPUTE_PII_FIELDS = ["cardholderName", "customerEmail"] as const;
 export type DisputePiiField = (typeof DISPUTE_PII_FIELDS)[number];

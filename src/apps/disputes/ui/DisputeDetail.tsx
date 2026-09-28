@@ -5,10 +5,10 @@ import type { SessionUser } from "@/platform/auth";
 import { can } from "@/platform/permissions";
 import { ApprovalBar } from "@/platform/ui/ApprovalBar";
 import { AuditTrail, type AuditTrailEvent } from "@/platform/ui/AuditTrail";
-import { api, formatDate } from "@/platform/ui/client";
+import { api, ApiError, formatDate } from "@/platform/ui/client";
 import { DetailPanel } from "@/platform/ui/DetailPanel";
 import { MaskedField } from "@/platform/ui/MaskedField";
-import { DISPUTE_PII_FIELDS, type DisputePiiField, type Proposal } from "../types";
+import { DISPUTE_PII_FIELDS, MIN_EVIDENCE_LENGTH, type DisputePiiField, type Proposal } from "../types";
 import { DueBadge } from "./DueBadge";
 import { StatusBadge } from "./StatusBadge";
 import { PROPOSAL_LABELS, formatAmount, formatReason, timeRemaining, type DisputeSummary } from "./shared";
@@ -165,7 +165,7 @@ export function DisputeDetail({ id, user, minRevealReasonLength }: { id: string;
         <div className="flex flex-col gap-2">
           <section className="rounded-lg border border-slate-200 bg-white p-4">
             <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-600">Evidence summary</h2>
-            <p className="mb-2 text-xs text-slate-500">Required to fight the dispute (at least 20 characters); optional when accepting.</p>
+            <p className="mb-2 text-xs text-slate-500">Required to fight the dispute (at least {MIN_EVIDENCE_LENGTH} characters); optional when accepting.</p>
             <textarea
               className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
               rows={3}
@@ -181,13 +181,13 @@ export function DisputeDetail({ id, user, minRevealReasonLength }: { id: string;
               { id: "accept", label: "Propose accept", tone: "danger", requiresNote: true },
               { id: "fight", label: "Propose fight", tone: "primary", requiresNote: true },
             ]}
-            onAction={(proposal, note) =>
-              post(`/api/disputes/${id}/propose`, {
-                proposal,
-                note,
-                ...(evidenceSummary.trim() ? { evidenceSummary: evidenceSummary.trim() } : {}),
-              })
-            }
+            onAction={(proposal, note) => {
+              const evidence = evidenceSummary.trim();
+              if (proposal === "fight" && evidence.length < MIN_EVIDENCE_LENGTH) {
+                return Promise.reject(new ApiError(400, `An evidence summary of at least ${MIN_EVIDENCE_LENGTH} characters is required to fight a dispute`));
+              }
+              return post(`/api/disputes/${id}/propose`, { proposal, note, ...(evidence ? { evidenceSummary: evidence } : {}) });
+            }}
           />
         </div>
       )}
