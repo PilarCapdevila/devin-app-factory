@@ -6,7 +6,7 @@ import { ForbiddenError, NotFoundError, ValidationError } from "./errors";
 import { can } from "./permissions";
 
 /** Global list of sensitive field names. Future apps add their fields here. */
-export const PII_FIELD_NAMES = ["dateOfBirth", "nationalId", "address"] as const;
+export const PII_FIELD_NAMES = ["dateOfBirth", "nationalId", "address", "customerEmail"] as const;
 export type PiiField = (typeof PII_FIELD_NAMES)[number];
 
 export const MASK = "••••••";

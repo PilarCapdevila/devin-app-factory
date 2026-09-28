@@ -10,9 +10,21 @@ export const SEED_USERS = [
   { email: "carol@example.com", name: "Carol Approver", role: "approver" },
   { email: "dan@example.com", name: "Dan Admin", role: "admin" },
   { email: "erin@example.com", name: "Erin Auditor", role: "auditor" },
+  { email: "frank@example.com", name: "Frank Support", role: "support_agent" },
 ] as const;
 
 export const CASE_COUNT = 30;
+export const REFUND_COUNT = 20;
+
+const REFUND_REASONS = [
+  "Duplicate charge",
+  "Order cancelled before shipment",
+  "Item returned by customer",
+  "Service not delivered",
+  "Customer disputed subscription renewal",
+  "Pricing error at checkout",
+];
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function pickFlags(score: number): string[] {
   const count = score >= 75 ? 3 : score >= 40 ? 2 : score >= 15 ? 1 : 0;
@@ -178,5 +190,116 @@ export async function seedDatabase(prisma: PrismaClient) {
     },
   });
 
-  return { users, caseCount: CASE_COUNT + 1 };
+  const refundCount = await seedRefunds(prisma, users);
+  return { users, caseCount: CASE_COUNT + 1, refundCount };
+}
+
+/**
+ * Refunds (src/apps/refunds): 20 USD refunds from $15 to $5,000, all requested by frank, in a
+ * fixed 2:2:1 rotation of PENDING_APPROVAL / ISSUED / RETURNED. Issued refunds carry the
+ * CONFIRMED request, the MockPaymentCall keyed by that request's id and the audit trail the
+ * approval action would have written; three of them are issued "today" for the dashboard tiles.
+ */
+async function seedRefunds(prisma: PrismaClient, users: Record<string, { id: string; role: string }>) {
+  const frank = users["frank@example.com"];
+  const carol = users["carol@example.com"];
+  const now = Date.now();
+
+  for (let i = 0; i < REFUND_COUNT; i++) {
+    const amountCents = i === 0 ? 1500 : i === REFUND_COUNT - 1 ? 500000 : faker.number.int({ min: 15, max: 5000 }) * 100;
+    const slot = i % 5;
+    const status = slot <= 1 ? "PENDING_APPROVAL" : slot <= 3 ? "ISSUED" : "RETURNED";
+    const issuedToday = status === "ISSUED" && i < 10;
+    const createdAt = new Date(now - (status === "PENDING_APPROVAL" ? i : issuedToday ? 0 : i + 2) * DAY_MS);
+    const reason = faker.helpers.arrayElement(REFUND_REASONS);
+    const refund = await prisma.refund.create({
+      data: {
+        paymentId: `pay_TEST${faker.string.alphanumeric({ length: 12, casing: "upper" })}`,
+        customerName: `${faker.person.firstName()} ${faker.person.lastName()} (TEST)`,
+        customerEmail: `test.${faker.internet.username().toLowerCase()}@example.com`,
+        cardLast4: faker.string.numeric(4),
+        amountCents,
+        currency: "USD",
+        reason,
+        status,
+        requestedById: frank.id,
+        createdAt,
+        updatedAt: createdAt,
+        issuedAt: status === "ISSUED" ? (issuedToday ? new Date(now) : new Date(createdAt.getTime() + DAY_MS)) : null,
+      },
+    });
+    const requestNote = `Seeded request: ${reason.toLowerCase()}.`;
+    const decided = status !== "PENDING_APPROVAL";
+    const decisionNote = status === "ISSUED" ? "Seeded: verified with the customer, refund issued." : "Seeded: returned, evidence missing.";
+    const request = await prisma.approvalRequest.create({
+      data: {
+        entityType: "refunds.refund",
+        entityId: refund.id,
+        action: "refunds.issue",
+        payload: JSON.stringify({ paymentId: refund.paymentId, amountCents, currency: "USD" }),
+        requestedById: frank.id,
+        requestedAt: createdAt,
+        requestNote,
+        status: status === "ISSUED" ? "CONFIRMED" : status === "RETURNED" ? "RETURNED" : "PENDING",
+        decidedById: decided ? carol.id : null,
+        decidedAt: decided ? refund.issuedAt ?? new Date(createdAt.getTime() + DAY_MS) : null,
+        decisionNote: decided ? decisionNote : null,
+      },
+    });
+    const pendingRefund = { ...refund, status: "PENDING_APPROVAL", issuedAt: null };
+    await prisma.auditEvent.create({
+      data: {
+        actorId: frank.id,
+        actorRole: "support_agent",
+        action: "refunds.refund.requested",
+        entityType: "refunds.refund",
+        entityId: refund.id,
+        after: JSON.stringify(pendingRefund),
+        reason: requestNote,
+      },
+    });
+    await prisma.auditEvent.create({
+      data: {
+        actorId: frank.id,
+        actorRole: "support_agent",
+        action: "approval.requested",
+        entityType: "approval.request",
+        entityId: request.id,
+        after: JSON.stringify({ ...request, status: "PENDING", decidedById: null, decidedAt: null, decisionNote: null }),
+        reason: requestNote,
+      },
+    });
+    if (!decided) continue;
+
+    if (status === "ISSUED") {
+      await prisma.mockPaymentCall.create({
+        data: { paymentId: refund.paymentId, amountCents, idempotencyKey: request.id, providerRefundId: `mock_re_${request.id}` },
+      });
+    }
+    await prisma.auditEvent.create({
+      data: {
+        actorId: carol.id,
+        actorRole: "approver",
+        action: status === "ISSUED" ? "refunds.refund.issued" : "refunds.refund.returned",
+        entityType: "refunds.refund",
+        entityId: refund.id,
+        before: JSON.stringify(pendingRefund),
+        after: JSON.stringify(refund),
+        reason: decisionNote,
+      },
+    });
+    await prisma.auditEvent.create({
+      data: {
+        actorId: carol.id,
+        actorRole: "approver",
+        action: status === "ISSUED" ? "approval.confirmed" : "approval.returned",
+        entityType: "approval.request",
+        entityId: request.id,
+        before: JSON.stringify({ ...request, status: "PENDING", decidedById: null, decidedAt: null, decisionNote: null }),
+        after: JSON.stringify(request),
+        reason: decisionNote,
+      },
+    });
+  }
+  return REFUND_COUNT;
 }

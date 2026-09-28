@@ -1,4 +1,4 @@
-# Internal tools platform + KYC Review Queue
+# Internal tools platform + KYC Review Queue + Refunds Dashboard
 
 A prototype of a secure internal-tools platform (the "app factory") and its first app, a KYC Review
 Queue. The platform owns authentication, authorization, record-level access, PII masking, auditing
@@ -21,9 +21,10 @@ Sign in with any seeded user (password `password123`, or `SEED_PASSWORD` from `.
 | ------------------- | -------- | -------------------------------------------------------------------- |
 | `alice@example.com` | analyst  | see and work **her own** cases, reveal PII with a reason             |
 | `bob@example.com`   | analyst  | same, for his cases                                                  |
-| `carol@example.com` | approver | see all cases, decide approval requests, reveal PII                  |
-| `dan@example.com`   | admin    | see all cases, assign cases, read the audit log (no PII reveal)      |
-| `erin@example.com`  | auditor  | see all cases (masked), read the audit log                           |
+| `carol@example.com` | approver | see all cases, decide approval requests, reveal PII; see all refunds and confirm/return refund requests |
+| `dan@example.com`   | admin    | see all cases, assign cases, read the audit log (no PII reveal); see all refunds (read-only, cannot decide) |
+| `erin@example.com`  | auditor  | see all cases (masked), read the audit log; see all refunds (masked, read-only) |
+| `frank@example.com` | support_agent | see all refunds and create refund requests (no KYC access, no PII reveal) |
 
 Other commands:
 
@@ -69,11 +70,13 @@ a route without a declared permission fails closed (403), and PII is masked by d
 ```
 src/platform/      auth, session, permissions, handler, audit, approvals, pii, db + ui/ components
 src/apps/kyc/      KYC app: visibleWhere, cases (workflow), approval action, schemas, ui/
+src/apps/refunds/  Refunds app: visibleWhere, refunds (maker step, filters, summary), approval action, schemas, ui/
+src/connectors/    external systems (payments.ts: PaymentsConnector interface + mock recording MockPaymentCall rows)
 src/apps/          register.ts (app registrations loaded at server start), links.ts (entity → page)
-src/app/           Next.js routes: pages (login, kyc, approvals, audit) and api/ (section 11 contract)
+src/app/           Next.js routes: pages (login, kyc, refunds, approvals, audit) and api/ (section 11 contract)
 src/proxy.ts       unauthenticated → 401 (API) / redirect to /login (pages)
 prisma/            schema, migration (incl. append-only triggers), deterministic seed
-tests/unit/        Vitest unit tests for platform + KYC logic
+tests/unit/        Vitest unit tests for platform + KYC + Refunds logic
 tests/security/    reserved for independent security tests (Playwright, API mode)
 docs/              ADDING_AN_APP.md, build-log/
 ```
@@ -165,6 +168,61 @@ npx prisma db execute --stdin <<< "DELETE FROM \"AuditEvent\";"
 
 (`tests/unit/audit.test.ts` asserts this through both Prisma and raw SQL.)
 
+### 6. Refunds Dashboard (second app on the platform)
+
+Support agents request refunds on customer payments; an approver confirms or returns each request;
+only a confirmation issues the refund, through the payments connector in `src/connectors/payments.ts`
+(mock implementation that records every call in the `MockPaymentCall` table). Refund status is
+`PENDING_APPROVAL → ISSUED | RETURNED`; a returned refund is final and the agent may request again for
+the same payment.
+
+| Method | Path | Permission | Who |
+| --- | --- | --- | --- |
+| `GET` | `/api/refunds?status&minAmountCents&maxAmountCents` | `refunds.refund.read` | support_agent, approver, admin, auditor |
+| `GET` | `/api/refunds/summary` | `refunds.refund.read` | tiles: pending count/total, issued-today count/total (UTC day) |
+| `GET` | `/api/refunds/:id` | `refunds.refund.read` | refund + approval requests + audit trail |
+| `POST` | `/api/refunds` | `refunds.refund.request` | support_agent only — the maker step |
+| `POST` | `/api/refunds/:id/reveal` | `pii.reveal` (`revealsPii`) | approver (support_agent has no `pii.reveal`) |
+| `POST` | `/api/approvals/:id/decide` | `refunds.refund.decide` (via the shared inbox route) | approver only |
+
+1. **Login and scope.** Sign in as `frank@example.com` — you land on `/refunds` (Frank has no KYC
+   permission; the root and login redirects follow the permission matrix). The dashboard shows the
+   summary tiles, status / min / max amount filters and every refund (`visibleWhere` is `{}` for all
+   refund readers; scope is still applied to every query). Open a refund: the customer email is
+   masked (`••••••`); `cardLast4` is shown as it is already a last-4 value. Frank sees no **Reveal**
+   button; `POST /api/refunds/<id>/reveal` as Frank → 403, audited as `access.denied`. A made-up id
+   at `/refunds/<id>` → **Not found**.
+2. **Maker step.** As Frank click **New refund request**, fill payment id, customer, card last 4,
+   amount and reason, then **Submit for approval**. The refund appears as `PENDING_APPROVAL` with a
+   `refunds.refund.requested` event; the `ApprovalRequest` (action `refunds.issue`) is created in the
+   same transaction. Frank cannot decide it: he has no approvals inbox and `/api/approvals/<id>/decide`
+   returns 403 for the requester even if he had the permission (M5). A second request for the same
+   payment while one is pending → 400.
+3. **Checker step.** Sign in as `carol@example.com`, open **Approvals** (or the refund page): the
+   request links to `/refunds/<id>`, where **Reveal** on the email requires a reason of 10+ characters
+   (`pii.reveal` audit event). **Confirm and issue refund** (note required) runs the `refunds.issue`
+   `onConfirm`: the connector is called with the approval request id as idempotency key, a
+   `MockPaymentCall` row is written, the refund becomes `ISSUED` and `refunds.refund.issued` +
+   `approval.confirmed` are audited — all in one transaction. **Return to support** makes it
+   `RETURNED` (`refunds.refund.returned`, no connector call). No route sets these statuses directly.
+4. **Read-only roles.** `dan@example.com` (admin) and `erin@example.com` (auditor) see the dashboard
+   and detail pages but no request form and no decide bar; `POST /api/refunds` and the decide route
+   return 403 (`access.denied` in the audit log). Dan cannot decide refunds — `refunds.refund.decide`
+   belongs to approvers only. Analysts (`alice`, `bob`) have no refunds permission at all: 403.
+5. **Audit.** In **Audit log** filter `entityType = refunds.refund` to see `refunds.refund.requested`,
+   `refunds.refund.issued`, `refunds.refund.returned` and `pii.reveal`, plus `approval.requested` /
+   `approval.confirmed` / `approval.returned` on the request and `access.denied` on denied routes.
+
+```bash
+# as frank:
+curl -b frank -X POST localhost:3000/api/refunds -H 'content-type: application/json' \
+  -d '{"paymentId":"pay_123","customerName":"Jane Doe","customerEmail":"jane@example.com","cardLast4":"4242","amountCents":4999,"currency":"USD","reason":"Duplicate charge"}'
+curl -b frank "localhost:3000/api/refunds?status=PENDING_APPROVAL&minAmountCents=1000"   # customerEmail masked
+# as carol:
+curl -b carol -X POST localhost:3000/api/approvals/<requestId>/decide -H 'content-type: application/json' \
+  -d '{"decision":"confirm","note":"Verified with the customer"}'           # refund ISSUED, MockPaymentCall written
+```
+
 ## Production path
 
 This is a prototype. Before production the following, deliberately out of scope here (SPEC.md §14),
@@ -180,6 +238,7 @@ would be added:
 - User-management UI (users are seeded only)
 - Data retention policies
 - Multi-step approvals (the engine supports exactly one decider per request)
+- A real payments provider behind `PaymentsConnector` (only the mock, which records calls in `MockPaymentCall`, exists)
 
 Also recommended: `secure` cookies are already enabled in production builds; put the app behind TLS,
 set `SESSION_SECRET` from a secret manager, and rotate the seed password out of `.env`.
