@@ -42,13 +42,21 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Security tests
-        # tests/security (incl. its playwright.config.ts) ships with the independent security suite.
+        id: security
         run: |
-          if [ -f tests/security/playwright.config.ts ]; then
-            npm run test:security
-          else
-            echo "tests/security/playwright.config.ts not present yet; skipping security tests"
-          fi
+          set -o pipefail
+          npm run test:security 2>&1 | tee security-test-output.txt
+
+      - name: Security test summary
+        if: always()
+        run: |
+          {
+            echo "## Security tests"
+            echo
+            echo '```text'
+            cat security-test-output.txt 2>/dev/null || echo "(security tests did not run: no output captured)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Playwright report
         if: failure()
