@@ -1,14 +1,16 @@
 import "dotenv/config";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { PrismaClient } from "../src/generated/prisma/client";
-import { seedDatabase } from "./seed-data";
+import { ensureSeedUsers, seedDatabase } from "./seed-data";
 
 async function main() {
   const url = process.env.DATABASE_URL ?? "file:./dev.db";
   const prisma = new PrismaClient({ adapter: new PrismaBetterSqlite3({ url }) });
   try {
     if ((await prisma.user.count()) > 0) {
-      console.log(`Database ${url} already seeded; skipping. Run "npm run db:reset" to start over.`);
+      const { created } = await ensureSeedUsers(prisma);
+      const added = created.length > 0 ? ` Added missing seed users: ${created.join(", ")}.` : "";
+      console.log(`Database ${url} already seeded; skipping demo data.${added} Run "npm run db:reset" to start over.`);
       return;
     }
     const result = await seedDatabase(prisma);

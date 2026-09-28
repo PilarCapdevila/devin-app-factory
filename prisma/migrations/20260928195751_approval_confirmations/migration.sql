@@ -11,3 +11,9 @@ CREATE TABLE "ApprovalConfirmation" (
 
 -- CreateIndex
 CREATE UNIQUE INDEX "ApprovalConfirmation_requestId_approverId_key" ON "ApprovalConfirmation"("requestId", "approverId");
+
+-- Backfill: requests confirmed before this table existed had exactly one confirmation, by the recorded decider
+INSERT INTO "ApprovalConfirmation" ("id", "requestId", "approverId", "confirmedAt", "note")
+SELECT 'backfill_' || "id", "id", "decidedById", COALESCE("decidedAt", CURRENT_TIMESTAMP), COALESCE("decisionNote", '')
+FROM "ApprovalRequest"
+WHERE "status" = 'CONFIRMED' AND "decidedById" IS NOT NULL;

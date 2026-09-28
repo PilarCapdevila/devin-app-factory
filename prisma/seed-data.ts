@@ -38,16 +38,26 @@ function pickFlags(score: number): string[] {
  * Cases: assigned to alice/bob in NEW or IN_REVIEW, a few unassigned, one APPROVED history,
  * and PENDING_APPROVAL cases recommended by alice so the approvals inbox is not empty.
  */
+/** Creates any SEED_USERS missing from the database (idempotent; existing users are left untouched). */
+export async function ensureSeedUsers(prisma: PrismaClient) {
+  const passwordHash = await bcrypt.hash(process.env.SEED_PASSWORD ?? "password123", 10);
+  const users: Record<string, { id: string; role: string }> = {};
+  const created: string[] = [];
+  for (const u of SEED_USERS) {
+    const existing = await prisma.user.findUnique({ where: { email: u.email } });
+    if (existing) {
+      users[u.email] = existing;
+    } else {
+      users[u.email] = await prisma.user.create({ data: { ...u, passwordHash } });
+      created.push(u.email);
+    }
+  }
+  return { users, created };
+}
+
 export async function seedDatabase(prisma: PrismaClient) {
   faker.seed(20260928);
-  const password = process.env.SEED_PASSWORD ?? "password123";
-  const passwordHash = await bcrypt.hash(password, 10);
-
-  const users: Record<string, { id: string; role: string }> = {};
-  for (const u of SEED_USERS) {
-    const created = await prisma.user.create({ data: { ...u, passwordHash } });
-    users[u.email] = created;
-  }
+  const { users } = await ensureSeedUsers(prisma);
   const alice = users["alice@example.com"];
   const bob = users["bob@example.com"];
   const carol = users["carol@example.com"];

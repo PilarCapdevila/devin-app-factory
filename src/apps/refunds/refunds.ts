@@ -73,7 +73,12 @@ export async function getRefund(user: SessionUser, id: string) {
     ...serializeRefund(refund),
     auditTrail,
     approvalRequests: await Promise.all(
-      approvalRequests.map(async (r) => ({ ...r, payload: JSON.parse(r.payload) as unknown, requiredApprovals: await requiredApprovalsFor(r) })),
+      approvalRequests.map(async (r) => ({
+        ...r,
+        payload: JSON.parse(r.payload) as unknown,
+        // Decided requests report the approvals actually recorded; the current policy only governs pending ones.
+        requiredApprovals: r.status === "PENDING" ? await requiredApprovalsFor(r) : Math.max(1, r.confirmations.length),
+      })),
     ),
   };
 }
