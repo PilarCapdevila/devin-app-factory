@@ -46,8 +46,9 @@
 - `npm run typecheck`, `npm run lint`: clean.
 - `npm test`: 51/51 unit tests pass (8 files, incl. new `disputes.test.ts`).
 - `npm run build`: clean (all `/disputes` pages + `/api/disputes*` routes listed).
-- `npm run test:security`: `tests/security/playwright.config.ts does not exist` — expected
-  until the independent security suite lands on `main`.
+- `npm run test:security`: 175/175 pass after the suite landed on `main` (rebasing required no
+  changes — the suite exercises the platform + KYC endpoints and all M1–M10 controls the Disputes
+  app inherits).
 - Browser walkthrough per role (alice, bob, carol, dan, erin): all 10 checks passed — scoped
   queues and 404 outside scope, masked PII + reasoned reveal, maker step, maker cannot decide,
   confirm/return in `/approvals`, audit log entries (`pii.reveal`, `access.denied`,
