@@ -8,7 +8,7 @@ was neither created nor edited.
 
 | Area | Files | Notes |
 | --- | --- | --- |
-| Tooling | `package.json`, `tsconfig.json`, `eslint.config.mjs`, `vitest.config.mts`, `playwright.config.ts`, `prisma.config.ts`, `.env.example`, `.gitignore`, `scripts/` | Next.js 16.3 (App Router, TS strict), Prisma 7 + SQLite (better-sqlite3 driver adapter), Tailwind 4, zod 4, iron-session 8, bcryptjs, Vitest 4, Playwright 1.58. Node 24. |
+| Tooling | `package.json`, `tsconfig.json`, `eslint.config.mjs`, `vitest.config.mts`, `prisma.config.ts`, `.env.example`, `.gitignore`, `scripts/` | Next.js 16.3 (App Router, TS strict), Prisma 7 + SQLite (better-sqlite3 driver adapter), Tailwind 4, zod 4, iron-session 8, bcryptjs, Vitest 4, Playwright 1.58. Node 24. |
 | Data model | `prisma/schema.prisma`, `prisma/migrations/20260928000000_init/migration.sql`, `prisma/seed.ts`, `prisma/seed-data.ts` | `User`, `KycCase`, `ApprovalRequest`, `AuditEvent` per SPEC §9. The migration adds `BEFORE UPDATE` / `BEFORE DELETE` triggers on `AuditEvent` that `RAISE(ABORT)`. Seed is deterministic (`faker.seed(20260928)`): 5 users (alice, bob analysts; carol approver; dan admin; erin auditor), 31 cases across all statuses incl. a `PENDING_APPROVAL` one requested by alice and an already-decided one, with matching audit events. |
 | Platform | `src/platform/{db,session,auth,permissions,errors,handler,audit,approvals,pii,apps}.ts` | Contracts from SPEC §7. `session.ts` holds the iron-session options (encrypted httpOnly cookie, sameSite=lax, secure in production, 8 h TTL, secret ≥ 32 chars enforced at startup via `src/instrumentation.ts`). `handler.ts` = `secureHandler`: 401 → 403 (fails closed without a declared permission) → zod validation (400) → app logic → recursive PII masking → generic error bodies; 403/404 for logged-in users are audited as `access.denied`. `approvals.ts` registers actions, creates requests and decides them in one transaction with all maker-checker checks. `pii.ts` masks by field name and implements reasoned reveal with the app's own record-level loader. |
 | Platform UI | `src/platform/ui/` | `AppShell`, `DataTable`, `DetailPanel`, `MaskedField`, `ApprovalBar`, `AuditTrail` (SPEC §7) plus `ApprovalsInbox`, `AuditLog`, `LogoutButton`, `api()` client helper. |
@@ -16,8 +16,8 @@ was neither created nor edited.
 | KYC app | `src/apps/kyc/{types,visibleWhere,cases,register,schemas}.ts`, `src/apps/kyc/ui/` | `visibleWhere` (analyst → `assignedToId = user.id`), workflow NEW → IN_REVIEW → PENDING_APPROVAL → APPROVED/REJECTED (→ IN_REVIEW on return), `kyc.decision` approval action, PII entity registration, queue + case detail components. |
 | Routes/pages | `src/app/api/**`, `src/app/(app)/**`, `src/app/login/` | Exactly the SPEC §11 contract; every route is one `secureHandler` call. Pages: `/login`, `/kyc`, `/kyc/[id]`, `/approvals`, `/audit`. |
 | Tests | `tests/unit/*.test.ts` (40 tests) | permissions matrix, PII masking/reveal, audit (transactional writes, filters, append-only triggers), approvals (maker-checker, one decider, callbacks), KYC (scope, filters, sorting, transitions), `secureHandler` (401/403/400/404/500, masking, fail-closed), session options. Tests run against a fresh seeded `unit-test.db` created in Vitest `globalSetup`. |
-| Security-test wiring | `playwright.config.ts`, `scripts/reset-db.mjs` | `npm run test:security`: Playwright's `webServer` runs `node scripts/reset-db.mjs && next dev -p 3100` with `DATABASE_URL=file:./test.db`, so the database is deleted, migrated and seeded before the app starts. `testDir` is `tests/security`; `--pass-with-no-tests` keeps the command green while that directory is still empty. Verified with a throw-away probe spec (401 → login → masked cases → 403) that was not committed. |
-| Docs/CI | `README.md`, `docs/ADDING_AN_APP.md`, `.github/workflows/ci.yml` | README: run instructions, §2 diagram, demo walkthrough per control, production path (§14 list). CI: install → setup → typecheck → lint → unit tests → build → Playwright install → test:security. |
+| Security-test wiring | `package.json` (`test:security`), `scripts/reset-db.mjs` | `npm run test:security` = `playwright test --config tests/security/playwright.config.ts`. Per the owner's convention the config ships with the independent security suite, so nothing was created under `tests/security` and the command currently exits with "does not exist". `scripts/reset-db.mjs` (`npm run db:reset`) is the building block for that config: with `DATABASE_URL=file:./test.db` it deletes, migrates and seeds `test.db`. The same wiring was verified end to end during the build with a temporary root Playwright config (`webServer: node scripts/reset-db.mjs && next dev -p 3100`, probe spec 401 → login → masked cases → 403); that config was removed again. |
+| Docs/CI | `README.md`, `docs/ADDING_AN_APP.md`, `.github/workflows/ci.yml` | README: run instructions, §2 diagram, demo walkthrough per control, production path (§14 list). CI: install → setup → typecheck → lint → unit tests → build → Playwright install → test:security (skipped with a notice while `tests/security/playwright.config.ts` is absent). |
 
 ## Security controls → implementation
 
@@ -51,7 +51,10 @@ was neither created nor edited.
 - **`src/instrumentation.ts` loads app registrations only in the Node.js runtime** (the proxy runs
   in the edge runtime where the Prisma client cannot be bundled). Platform registries also lazily
   `loadApps()` so direct imports (tests) work.
-- **`next dev` for `test:security`**: Next.js 16 allows one dev server per project directory, so the
+- **Conventions from the security-suite owner (applied mid-build):** seed password env var is
+  `SEED_PASSWORD`; `test:security` uses `tests/security/playwright.config.ts` (not created here);
+  denials are audited as `access.denied` (already the case).
+- **`next dev` on port 3100**: Next.js 16 allows one dev server per project directory, so the
   README asks to stop a running `npm run dev` before `npm run test:security`. CI has no such conflict.
 - Scaffold leftovers removed (default SVGs). `AGENTS.md`/`CLAUDE.md` are generated by `next dev`
   and committed as the file itself recommends.
@@ -67,7 +70,7 @@ was neither created nor edited.
 | `npm run lint` | clean |
 | `npm run typecheck` | clean |
 | `npm run build` | ok — 13 static/dynamic routes + proxy |
-| `npm run test:security` | wired: resets/seeds `test.db`, starts on :3100, runs `tests/security` (empty → passes with no tests) |
+| `npm run test:security` | wired to `tests/security/playwright.config.ts`; exits "does not exist" until the security suite lands (expected) |
 
 ## Not built (by instruction / SPEC §14)
 

@@ -11,7 +11,7 @@
     "setup": "node scripts/ensure-env.mjs && prisma migrate deploy && prisma generate && tsx prisma/seed.ts",
     "db:reset": "node scripts/reset-db.mjs",
     "test": "vitest run",
-    "test:security": "playwright test --pass-with-no-tests",
+    "test:security": "playwright test --config tests/security/playwright.config.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

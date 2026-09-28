@@ -15,7 +15,7 @@ npm run setup        # creates .env (random SESSION_SECRET) if missing, migrates
 npm run dev          # http://localhost:3000
 ```
 
-Sign in with any seeded user (password `password123`, or `SEED_USER_PASSWORD` from `.env`):
+Sign in with any seeded user (password `password123`, or `SEED_PASSWORD` from `.env`):
 
 | User                | Role     | Can                                                                  |
 | ------------------- | -------- | -------------------------------------------------------------------- |
@@ -31,14 +31,17 @@ Other commands:
 npm test               # unit tests (Vitest, fresh unit-test.db)
 npm run lint           # eslint
 npm run typecheck      # tsc --noEmit
-npm run test:security  # Playwright API tests in tests/security against a fresh test.db on port 3100
-npm run db:reset       # delete + migrate + reseed the database at DATABASE_URL
+npm run test:security  # Playwright, config tests/security/playwright.config.ts (test.db, port 3100)
+npm run db:reset       # delete + migrate + reseed the database at DATABASE_URL (e.g. DATABASE_URL=file:./test.db)
 npm run build          # production build
 ```
 
-`npm run test:security` resets and seeds `test.db`, starts the app on port 3100 and runs whatever is in
-`tests/security` (reserved for independently written tests; currently empty, so the run passes with
-no tests). Stop any other `next dev` in this directory first — Next.js allows one dev server per project.
+`npm run test:security` runs Playwright with `tests/security/playwright.config.ts`. That directory —
+config and tests — is delivered by the independent security suite and is intentionally absent here,
+so the command exits with "tests/security/playwright.config.ts does not exist" until the suite is merged. The suite's config is
+expected to reset and seed `test.db` (`DATABASE_URL=file:./test.db npm run db:reset`) and start the
+app on port 3100 through Playwright's `webServer`. Stop any other `next dev` in this directory first —
+Next.js allows one dev server per project.
 
 ## Design in one picture
 

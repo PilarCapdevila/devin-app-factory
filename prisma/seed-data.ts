@@ -20,13 +20,13 @@ function pickFlags(score: number): string[] {
 }
 
 /**
- * Deterministic seed (fixed faker seed). Users get the dev-only SEED_USER_PASSWORD.
+ * Deterministic seed (fixed faker seed). Users get the dev-only SEED_PASSWORD.
  * Cases: assigned to alice/bob in NEW or IN_REVIEW, a few unassigned, one APPROVED history,
  * and PENDING_APPROVAL cases recommended by alice so the approvals inbox is not empty.
  */
 export async function seedDatabase(prisma: PrismaClient) {
   faker.seed(20260928);
-  const password = process.env.SEED_USER_PASSWORD ?? "password123";
+  const password = process.env.SEED_PASSWORD ?? "password123";
   const passwordHash = await bcrypt.hash(password, 10);
 
   const users: Record<string, { id: string; role: string }> = {};
