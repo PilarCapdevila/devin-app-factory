@@ -15,11 +15,12 @@ model User {
   role         String
   passwordHash String
 
-  assignedCases    KycCase[]         @relation("AssignedCases")
-  assignedDisputes Dispute[]         @relation("AssignedDisputes")
-  approvalRequests ApprovalRequest[] @relation("RequestedApprovals")
-  approvalDecided  ApprovalRequest[] @relation("DecidedApprovals")
-  requestedRefunds Refund[]          @relation("RequestedRefunds")
+  assignedCases         KycCase[]              @relation("AssignedCases")
+  assignedDisputes      Dispute[]              @relation("AssignedDisputes")
+  approvalRequests      ApprovalRequest[]      @relation("RequestedApprovals")
+  approvalDecided       ApprovalRequest[]      @relation("DecidedApprovals")
+  approvalConfirmations ApprovalConfirmation[]
+  requestedRefunds      Refund[]               @relation("RequestedRefunds")
 }
 
 // Status: NEW | IN_REVIEW | PENDING_APPROVAL | APPROVED | REJECTED
@@ -69,25 +70,40 @@ model Dispute {
   @@index([respondBy])
 }
 
-// Status: PENDING | CONFIRMED | RETURNED
+// Status: PENDING | CONFIRMED | RETURNED. Stays PENDING until the action's requiredApprovals
+// confirmations have been recorded; the confirmation that completes them sets decidedById.
 model ApprovalRequest {
-  id            String    @id @default(cuid())
+  id            String                 @id @default(cuid())
   entityType    String
   entityId      String
   action        String
   payload       String // JSON
   requestedById String
-  requestedBy   User      @relation("RequestedApprovals", fields: [requestedById], references: [id])
-  requestedAt   DateTime  @default(now())
+  requestedBy   User                   @relation("RequestedApprovals", fields: [requestedById], references: [id])
+  requestedAt   DateTime               @default(now())
   requestNote   String
-  status        String    @default("PENDING")
+  status        String                 @default("PENDING")
   decidedById   String?
-  decidedBy     User?     @relation("DecidedApprovals", fields: [decidedById], references: [id])
+  decidedBy     User?                  @relation("DecidedApprovals", fields: [decidedById], references: [id])
   decidedAt     DateTime?
   decisionNote  String?
+  confirmations ApprovalConfirmation[]
 
   @@index([status])
   @@index([entityType, entityId])
+}
+
+// One row per approver who confirmed a request (including the final one); an approver confirms once.
+model ApprovalConfirmation {
+  id          String          @id @default(cuid())
+  requestId   String
+  request     ApprovalRequest @relation(fields: [requestId], references: [id])
+  approverId  String
+  approver    User            @relation(fields: [approverId], references: [id])
+  confirmedAt DateTime        @default(now())
+  note        String
+
+  @@unique([requestId, approverId])
 }
 
 // Append-only: triggers in prisma/migrations reject UPDATE and DELETE.

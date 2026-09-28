@@ -5,7 +5,7 @@ import type { SessionUser } from "@/platform/auth";
 import { can } from "@/platform/permissions";
 import { ApprovalBar } from "@/platform/ui/ApprovalBar";
 import { AuditTrail, type AuditTrailEvent } from "@/platform/ui/AuditTrail";
-import { api, formatDate } from "@/platform/ui/client";
+import { api, approvalProgressLabel, formatDate } from "@/platform/ui/client";
 import { DetailPanel } from "@/platform/ui/DetailPanel";
 import { MaskedField } from "@/platform/ui/MaskedField";
 import { StatusBadge } from "./StatusBadge";
@@ -22,7 +22,14 @@ type ApprovalRequestView = {
   decidedBy: { name: string } | null;
   decidedAt: string | null;
   decisionNote: string | null;
+  requiredApprovals: number;
+  confirmations: { id: string; confirmedAt: string; note: string; approver: { id: string; name: string } }[];
 };
+
+function confirmedByLabel(confirmations: ApprovalRequestView["confirmations"]): string {
+  if (confirmations.length === 0) return "Nobody yet";
+  return confirmations.map((c) => `${c.approver.name} · ${formatDate(c.confirmedAt)}`).join("; ");
+}
 
 type RefundView = RefundSummary & { auditTrail: AuditTrailEvent[]; approvalRequests: ApprovalRequestView[] };
 
@@ -41,7 +48,8 @@ export function RefundDetail({ id, user, minRevealReasonLength }: { id: string; 
   if (!refund) return <p className="text-sm text-slate-500">Loading…</p>;
 
   const pending = refund.approvalRequests.find((r) => r.status === "PENDING");
-  const canDecide = can(user, "refunds.refund.decide") && pending !== undefined && pending.requestedById !== user.id;
+  const alreadyConfirmed = pending?.confirmations.some((c) => c.approver.id === user.id) ?? false;
+  const canDecide = can(user, "refunds.refund.decide") && pending !== undefined && pending.requestedById !== user.id && !alreadyConfirmed;
   const decided = refund.approvalRequests.find((r) => r.status !== "PENDING");
 
   async function decide(decision: string, note: string) {
@@ -103,8 +111,18 @@ export function RefundDetail({ id, user, minRevealReasonLength }: { id: string; 
             { label: "Will issue", value: pending.payload?.amountCents !== undefined ? formatMoney(pending.payload.amountCents, pending.payload.currency) : "—" },
             { label: "Requested by", value: `${pending.requestedBy.name} · ${formatDate(pending.requestedAt)}` },
             { label: "Note", value: pending.requestNote },
+            ...(pending.requiredApprovals > 1
+              ? [
+                  { label: "Approval progress", value: <span className="font-medium text-amber-800">{approvalProgressLabel(pending)}</span> },
+                  { label: "Confirmed by", value: confirmedByLabel(pending.confirmations) },
+                ]
+              : []),
           ]}
         />
+      )}
+
+      {pending && alreadyConfirmed && (
+        <p className="text-sm text-slate-600">You have confirmed this refund; it is waiting for another approver.</p>
       )}
 
       {canDecide && pending && (
@@ -112,7 +130,12 @@ export function RefundDetail({ id, user, minRevealReasonLength }: { id: string; 
           title="Decide"
           notePlaceholder="Decision note (required)"
           actions={[
-            { id: "confirm", label: "Confirm and issue refund", tone: "primary", requiresNote: true },
+            {
+              id: "confirm",
+              label: pending.requiredApprovals > pending.confirmations.length + 1 ? "Confirm (more approvals needed)" : "Confirm and issue refund",
+              tone: "primary",
+              requiresNote: true,
+            },
             { id: "return", label: "Return to support", tone: "danger", requiresNote: true },
           ]}
           onAction={decide}
@@ -126,6 +149,12 @@ export function RefundDetail({ id, user, minRevealReasonLength }: { id: string; 
             { label: "Outcome", value: decided.status === "CONFIRMED" ? "Confirmed — refund issued" : "Returned — no refund issued" },
             { label: "Decided by", value: `${decided.decidedBy?.name ?? "—"} · ${formatDate(decided.decidedAt)}` },
             { label: "Note", value: decided.decisionNote ?? "—" },
+            ...(decided.requiredApprovals > 1
+              ? [
+                  { label: "Approvals", value: `${decided.confirmations.length} of ${decided.requiredApprovals}` },
+                  { label: "Confirmed by", value: confirmedByLabel(decided.confirmations) },
+                ]
+              : []),
           ]}
         />
       )}

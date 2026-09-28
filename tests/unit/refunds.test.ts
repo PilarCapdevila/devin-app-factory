@@ -14,11 +14,11 @@ import { POST as revealRoute } from "@/app/api/refunds/[id]/reveal/route";
 import { GET as listRoute, POST as requestRoute } from "@/app/api/refunds/route";
 import { mockPaymentsConnector } from "@/connectors/payments";
 import { loadApps } from "@/platform/apps";
-import { decideApproval, listPendingApprovalsFor } from "@/platform/approvals";
+import { decideApproval, listPendingApprovalsFor, requiredApprovalsFor } from "@/platform/approvals";
 import { prisma, withTransaction } from "@/platform/db";
 import { ForbiddenError, NotFoundError, ValidationError } from "@/platform/errors";
 import { MASK, revealField } from "@/platform/pii";
-import { alice, carol, createRefund, dan, erin, frank, jsonRequest } from "./helpers";
+import { alice, carol, createRefund, dan, erin, frank, grace, jsonRequest } from "./helpers";
 
 vi.spyOn(console, "error").mockImplementation(() => {});
 
@@ -189,6 +189,138 @@ describe("Refunds workflow", () => {
     await expect(decideApproval({ requestId: stale.id, deciderId: approver.id, decision: "return", note: "x" })).rejects.toBeInstanceOf(ValidationError);
     expect((await prisma.approvalRequest.findUniqueOrThrow({ where: { id: stale.id } })).status).toBe("PENDING");
     expect(await prisma.mockPaymentCall.count({ where: { idempotencyKey: stale.id } })).toBe(0);
+  });
+});
+
+describe("Refunds over $2,000.00 need two different approvers", () => {
+  beforeAll(() => loadApps());
+
+  it("the boundary is strict: $2,000.00 needs one approval, $2,000.01 needs two, also for requests pending before the rule", async () => {
+    const atThreshold = await createRefund({ amountCents: 200_000 });
+    const overThreshold = await createRefund({ amountCents: 200_001 });
+    expect(await requiredApprovalsFor(atThreshold.request!)).toBe(1);
+    expect(await requiredApprovalsFor(overThreshold.request!)).toBe(2);
+    expect((await getRefund(await carol(), atThreshold.refund.id)).approvalRequests[0]).toMatchObject({ requiredApprovals: 1, confirmations: [] });
+    expect((await getRefund(await carol(), overThreshold.refund.id)).approvalRequests[0]).toMatchObject({ requiredApprovals: 2, confirmations: [] });
+  });
+
+  it("exactly $2,000.00 is issued on the first confirmation", async () => {
+    const approver = await carol();
+    const { refund, request } = await createRefund({ amountCents: 200_000 });
+    const decided = await decideApproval({ requestId: request!.id, deciderId: approver.id, decision: "confirm", note: "single approval" });
+    expect(decided.status).toBe("CONFIRMED");
+    expect((await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } })).status).toBe("ISSUED");
+    expect(await prisma.mockPaymentCall.count({ where: { idempotencyKey: request!.id } })).toBe(1);
+    expect(await auditActions(request!.id)).toEqual(["approval.confirmed"]);
+  });
+
+  it("first confirmation keeps the request PENDING, issues nothing, audits the step and leaves the approver's inbox", async () => {
+    const first = await carol();
+    const second = await grace();
+    const { refund, request } = await createRefund({ amountCents: 250_000 });
+
+    const step = await decideApproval({ requestId: request!.id, deciderId: first.id, decision: "confirm", note: "looks right" });
+    expect(step.status).toBe("PENDING");
+    expect(step.decidedById).toBeNull();
+    expect(step.requiredApprovals).toBe(2);
+    expect(step.confirmations.map((c) => c.approverId)).toEqual([first.id]);
+
+    expect((await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } })).status).toBe("PENDING_APPROVAL");
+    expect(await prisma.mockPaymentCall.count({ where: { idempotencyKey: request!.id } })).toBe(0);
+    expect(await auditActions(refund.id)).toEqual([]);
+    expect(await auditActions(request!.id)).toEqual(["approval.step_confirmed"]);
+    const event = await prisma.auditEvent.findFirstOrThrow({ where: { action: "approval.step_confirmed", entityId: request!.id } });
+    expect(event.actorId).toBe(first.id);
+    expect(event.reason).toBe("looks right");
+    expect(JSON.parse(event.before!)).toMatchObject({ approvalsGiven: 0, approvalsRequired: 2 });
+    expect(JSON.parse(event.after!)).toMatchObject({ approvalsGiven: 1, approvalsRequired: 2, status: "PENDING" });
+
+    expect((await listPendingApprovalsFor(first)).some((r) => r.id === request!.id)).toBe(false);
+    const inGracesInbox = (await listPendingApprovalsFor(second)).find((r) => r.id === request!.id);
+    expect(inGracesInbox?.requiredApprovals).toBe(2);
+    expect(inGracesInbox?.confirmations.map((c) => c.approver.email)).toEqual([first.email]);
+
+    const detail = await getRefund(second, refund.id);
+    expect(detail.approvalRequests[0]).toMatchObject({ status: "PENDING", requiredApprovals: 2 });
+    expect(detail.approvalRequests[0].confirmations.map((c) => c.approver.id)).toEqual([first.id]);
+  });
+
+  it("the same approver cannot confirm twice, nor return after confirming; the requester is never an approver", async () => {
+    const first = await carol();
+    const { refund, request } = await createRefund({ amountCents: 250_000 });
+    await decideApproval({ requestId: request!.id, deciderId: first.id, decision: "confirm", note: "one" });
+    await expect(decideApproval({ requestId: request!.id, deciderId: first.id, decision: "confirm", note: "two" })).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(decideApproval({ requestId: request!.id, deciderId: first.id, decision: "return", note: "changed my mind" })).rejects.toBeInstanceOf(ForbiddenError);
+    for (const decider of await Promise.all([frank(), dan(), alice(), erin()])) {
+      await expect(decideApproval({ requestId: request!.id, deciderId: decider.id, decision: "confirm", note: "trying" })).rejects.toBeInstanceOf(ForbiddenError);
+    }
+    const stillPending = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: request!.id }, include: { confirmations: true } });
+    expect(stillPending.status).toBe("PENDING");
+    expect(stillPending.confirmations).toHaveLength(1);
+    expect((await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } })).status).toBe("PENDING_APPROVAL");
+    expect(await prisma.mockPaymentCall.count({ where: { idempotencyKey: request!.id } })).toBe(0);
+  });
+
+  it("the second, different approver's confirmation issues the refund once and closes the request", async () => {
+    const first = await carol();
+    const second = await grace();
+    const { refund, request } = await createRefund({ amountCents: 250_000 });
+    await decideApproval({ requestId: request!.id, deciderId: first.id, decision: "confirm", note: "one" });
+    const decided = await decideApproval({ requestId: request!.id, deciderId: second.id, decision: "confirm", note: "two" });
+    expect(decided.status).toBe("CONFIRMED");
+    expect(decided.decidedById).toBe(second.id);
+    expect(decided.decisionNote).toBe("two");
+    expect(decided.confirmations.map((c) => c.approverId)).toEqual([first.id, second.id]);
+
+    const issued = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } });
+    expect(issued.status).toBe("ISSUED");
+    expect(issued.issuedAt).not.toBeNull();
+    expect(await prisma.mockPaymentCall.count({ where: { idempotencyKey: request!.id } })).toBe(1);
+    expect(await auditActions(request!.id)).toEqual(["approval.step_confirmed", "approval.confirmed"]);
+    const issuedEvent = await prisma.auditEvent.findFirstOrThrow({ where: { action: "refunds.refund.issued", entityId: refund.id } });
+    expect(issuedEvent.actorId).toBe(second.id);
+
+    expect((await listPendingApprovalsFor(second)).some((r) => r.id === request!.id)).toBe(false);
+    await expect(decideApproval({ requestId: request!.id, deciderId: second.id, decision: "confirm", note: "again" })).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("a return by the other approver after the first confirmation returns the refund and never calls the connector", async () => {
+    const first = await carol();
+    const second = await grace();
+    const { refund, request } = await createRefund({ amountCents: 250_000 });
+    await decideApproval({ requestId: request!.id, deciderId: first.id, decision: "confirm", note: "one" });
+    const decided = await decideApproval({ requestId: request!.id, deciderId: second.id, decision: "return", note: "amount does not match the order" });
+    expect(decided.status).toBe("RETURNED");
+    expect(decided.decidedById).toBe(second.id);
+    const returned = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } });
+    expect(returned.status).toBe("RETURNED");
+    expect(returned.issuedAt).toBeNull();
+    expect(await prisma.mockPaymentCall.count({ where: { idempotencyKey: request!.id } })).toBe(0);
+    expect(await auditActions(refund.id)).toEqual(["refunds.refund.returned"]);
+    expect(await auditActions(request!.id)).toEqual(["approval.step_confirmed", "approval.returned"]);
+  });
+
+  it("a return before any confirmation returns an over-threshold refund immediately", async () => {
+    const { refund, request } = await createRefund({ amountCents: 250_000 });
+    const decided = await decideApproval({ requestId: request!.id, deciderId: (await grace()).id, decision: "return", note: "duplicate request" });
+    expect(decided.status).toBe("RETURNED");
+    expect((await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } })).status).toBe("RETURNED");
+    expect(await auditActions(request!.id)).toEqual(["approval.returned"]);
+  });
+
+  it("seeded issued refunds over $2,000 carry two confirmations by different approvers; the others one", async () => {
+    const issued = await prisma.approvalRequest.findMany({
+      where: { action: "refunds.issue", status: "CONFIRMED", requestNote: { startsWith: "Seeded" } },
+      include: { confirmations: true },
+    });
+    expect(issued.length).toBeGreaterThan(0);
+    for (const request of issued) {
+      const { amountCents } = JSON.parse(request.payload) as { amountCents: number };
+      const approvers = new Set(request.confirmations.map((c) => c.approverId));
+      expect(approvers.size).toBe(amountCents > 200_000 ? 2 : 1);
+      expect(approvers.has(request.requestedById)).toBe(false);
+      expect(approvers.has(request.decidedById!)).toBe(true);
+    }
   });
 });
 

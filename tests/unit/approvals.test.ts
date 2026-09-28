@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { loadApps } from "@/platform/apps";
-import { createApprovalRequest, decideApproval, listPendingApprovalsFor } from "@/platform/approvals";
+import { createApprovalRequest, decideApproval, listPendingApprovalsFor, requiredApprovalsFor } from "@/platform/approvals";
 import { prisma, withTransaction } from "@/platform/db";
 import { ForbiddenError, NotFoundError, ValidationError } from "@/platform/errors";
 import { alice, bob, carol, createCase, dan } from "./helpers";
@@ -66,17 +66,21 @@ describe("approvals engine", () => {
     await expect(decideApproval({ requestId: "missing", deciderId: approver.id, decision: "confirm", note: "x" })).rejects.toBeInstanceOf(NotFoundError);
   });
 
-  it("confirm runs the app's onConfirm: exactly one decider, final status set, audited", async () => {
+  it("confirm runs the app's onConfirm: one decider by default (requiredApprovals unset), final status set, audited", async () => {
     const requester = await alice();
     const approver = await carol();
     const { kycCase, request } = await pendingRequest(requester.id, "reject");
+    expect(await requiredApprovalsFor(request)).toBe(1);
     const decided = await decideApproval({ requestId: request.id, deciderId: approver.id, decision: "confirm", note: "agree" });
     expect(decided.status).toBe("CONFIRMED");
     expect(decided.decidedById).toBe(approver.id);
     expect(decided.decidedAt).toBeInstanceOf(Date);
     expect(decided.decisionNote).toBe("agree");
+    expect(decided.requiredApprovals).toBe(1);
+    expect(decided.confirmations.map((c) => c.approverId)).toEqual([approver.id]);
     expect((await prisma.kycCase.findUniqueOrThrow({ where: { id: kycCase.id } })).status).toBe("REJECTED");
     expect(await prisma.auditEvent.count({ where: { action: "approval.confirmed", entityId: request.id } })).toBe(1);
+    expect(await prisma.auditEvent.count({ where: { action: "approval.step_confirmed", entityId: request.id } })).toBe(0);
     expect(await prisma.auditEvent.count({ where: { action: "kyc.case.rejected", entityId: kycCase.id } })).toBe(1);
   });
 
@@ -100,7 +104,8 @@ describe("approvals engine", () => {
   it("the inbox only shows requests the caller may decide and never their own", async () => {
     const requester = await alice();
     const { request } = await pendingRequest(requester.id);
-    expect((await listPendingApprovalsFor(await carol())).some((r) => r.id === request.id)).toBe(true);
+    const inCarolsInbox = (await listPendingApprovalsFor(await carol())).find((r) => r.id === request.id);
+    expect(inCarolsInbox).toMatchObject({ requiredApprovals: 1, confirmations: [] });
     expect((await listPendingApprovalsFor(requester)).some((r) => r.id === request.id)).toBe(false);
     expect(await listPendingApprovalsFor(await dan())).toEqual([]);
   });

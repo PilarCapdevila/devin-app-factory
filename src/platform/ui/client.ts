@@ -31,3 +31,9 @@ export function formatDate(value: string | Date | null | undefined): string {
   if (!value) return "—";
   return new Date(value).toLocaleString();
 }
+
+/** "1 of 2 approvals" for multi-approver requests; nothing for the usual single decision. */
+export function approvalProgressLabel(request: { requiredApprovals: number; confirmations: unknown[] }): string | null {
+  if (request.requiredApprovals <= 1) return null;
+  return `${request.confirmations.length} of ${request.requiredApprovals} approvals`;
+}
