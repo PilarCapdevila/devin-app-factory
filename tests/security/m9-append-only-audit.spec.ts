@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { writeAuditEvent } from "../../src/platform/audit";
+import { writeAuditEvent } from "./helpers/platform";
 import { auditCount, latestAuditEvent } from "./helpers/audit";
 import { anyCaseAssignedTo, newCaseAssignedTo, startReview } from "./helpers/cases";
 import { dbUser, prisma } from "./helpers/db";

@@ -41,13 +41,9 @@ export function collectStrings(value: unknown, out: string[] = []): string[] {
 
 /** Fails if any raw PII value of the given cases appears anywhere in `body`. */
 export function expectNoRawPii(body: unknown, cases: ReadonlyArray<Pick<DbCase, "dateOfBirth" | "nationalId" | "address">>): void {
-  const strings = collectStrings(body);
-  const raw = new Set(cases.flatMap(rawPiiStrings));
-  for (const s of strings) {
-    for (const value of raw) {
-      expect(s, `raw PII value leaked in response`).not.toContain(value);
-    }
-  }
+  const raw = [...new Set(cases.flatMap(rawPiiStrings))];
+  const leaked = collectStrings(body).filter((s) => raw.some((value) => s.includes(value)));
+  expect(leaked, "raw PII values leaked in response").toEqual([]);
 }
 
 /** Asserts a single API-returned case has every PII field masked per SPEC.md §7. */

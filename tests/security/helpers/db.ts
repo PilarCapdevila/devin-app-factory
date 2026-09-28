@@ -1,6 +1,7 @@
-import { PrismaClient, type Prisma } from "@prisma/client";
+import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
+import { PrismaClient, type Prisma } from "./platform";
 import { TEST_DATABASE_URL } from "./config";
-import { USERS, type UserKey } from "./users";
+import { ROLES, USERS, type Role, type UserKey } from "./users";
 
 // `npm run test:security` sets DATABASE_URL=file:./test.db (SPEC.md §11); default it for ad-hoc runs.
 process.env.DATABASE_URL ??= TEST_DATABASE_URL;
@@ -8,9 +9,10 @@ process.env.DATABASE_URL ??= TEST_DATABASE_URL;
 /**
  * Single Prisma client for direct database assertions (SPEC.md §11 allows the security
  * suite to use Prisma against `test.db`). Kept in one place so the construction can be
- * adapted (e.g. driver adapter) without touching any test.
+ * adapted without touching any test. The schema generates the client into
+ * `src/generated/prisma` and uses the better-sqlite3 driver adapter.
  */
-export const prisma = new PrismaClient();
+export const prisma = new PrismaClient({ adapter: new PrismaBetterSqlite3({ url: process.env.DATABASE_URL }) });
 
 /**
  * A transaction client on which every operation fails, simulating an audit store that cannot
@@ -31,7 +33,13 @@ export function failingTransactionClient(reason = "simulated audit storage failu
 export interface DbUser {
   id: string;
   email: string;
-  role: string;
+  role: Role;
+}
+
+function asRole(value: string): Role {
+  const role = ROLES.find((r) => r === value);
+  if (!role) throw new Error(`seeded user has unknown role ${JSON.stringify(value)}; expected one of ${ROLES.join(", ")}`);
+  return role;
 }
 
 const userCache = new Map<UserKey, DbUser>();
@@ -43,8 +51,9 @@ export async function dbUser(key: UserKey): Promise<DbUser> {
     where: { email: USERS[key].email },
     select: { id: true, email: true, role: true },
   });
-  userCache.set(key, user);
-  return user;
+  const typed: DbUser = { ...user, role: asRole(user.role) };
+  userCache.set(key, typed);
+  return typed;
 }
 
 export interface DbCase {

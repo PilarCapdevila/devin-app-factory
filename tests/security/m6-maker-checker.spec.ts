@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { decideApproval } from "../../src/platform/approvals";
+import { decideApproval } from "./helpers/platform";
 import { dispose, login } from "./helpers/api";
 import { decide, pendingApprovalCaseFor } from "./helpers/cases";
 import { dbApprovalRequest, dbCase, dbUser, prisma } from "./helpers/db";

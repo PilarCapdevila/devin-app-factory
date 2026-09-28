@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { writeAuditEvent } from "../../src/platform/audit";
+import { writeAuditEvent } from "./helpers/platform";
 import { dispose, login, type Session } from "./helpers/api";
 import { auditEvents, expectCompleteEvent, jsonText, lastEvent, type AuditRow } from "./helpers/audit";
 import {
