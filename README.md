@@ -1,7 +1,8 @@
+# Internal tools platform + KYC Review Queue + Dispute Queue
 # Internal tools platform + KYC Review Queue + Refunds Dashboard
 
-A prototype of a secure internal-tools platform (the "app factory") and its first app, a KYC Review
-Queue. The platform owns authentication, authorization, record-level access, PII masking, auditing
+A prototype of a secure internal-tools platform (the "app factory") and its apps: a KYC Review
+Queue and a Dispute Queue (card chargebacks). The platform owns authentication, authorization, record-level access, PII masking, auditing
 and maker-checker approvals; apps contain business logic only. `SPEC.md` is the product/architecture
 spec and `SECURITY.md` lists the non-negotiable controls (M1–M10, H1–H8).
 
@@ -25,6 +26,11 @@ Sign in with any seeded user (password `password123`, or `SEED_PASSWORD` from `.
 | `dan@example.com`   | admin    | see all cases, assign cases, read the audit log (no PII reveal); see all refunds (read-only, cannot decide) |
 | `erin@example.com`  | auditor  | see all cases (masked), read the audit log; see all refunds (masked, read-only) |
 | `frank@example.com` | support_agent | see all refunds and create refund requests (no KYC access, no PII reveal) |
+
+The same users and roles carry over to the Dispute Queue (`/disputes`): analysts work **their own**
+disputes and propose accept/fight, the approver signs every proposal off, the admin assigns disputes,
+the auditor reads everything masked. Permissions are `disputes.dispute.read|work|decide|assign`; see
+[Dispute Queue](#dispute-queue) below.
 
 Other commands:
 
@@ -70,12 +76,15 @@ a route without a declared permission fails closed (403), and PII is masked by d
 ```
 src/platform/      auth, session, permissions, handler, audit, approvals, pii, db + ui/ components
 src/apps/kyc/      KYC app: visibleWhere, cases (workflow), approval action, schemas, ui/
+src/apps/disputes/ Dispute Queue app: visibleWhere, disputes (workflow + deadline flags), approval action, schemas, ui/
 src/apps/refunds/  Refunds app: visibleWhere, refunds (maker step, filters, summary), approval action, schemas, ui/
 src/connectors/    external systems (payments.ts: PaymentsConnector interface + mock recording MockPaymentCall rows)
 src/apps/          register.ts (app registrations loaded at server start), links.ts (entity → page)
+src/app/           Next.js routes: pages (login, kyc, disputes, approvals, audit) and api/ (section 11 contract + api/disputes)
 src/app/           Next.js routes: pages (login, kyc, refunds, approvals, audit) and api/ (section 11 contract)
 src/proxy.ts       unauthenticated → 401 (API) / redirect to /login (pages)
 prisma/            schema, migration (incl. append-only triggers), deterministic seed
+tests/unit/        Vitest unit tests for platform + KYC + disputes logic
 tests/unit/        Vitest unit tests for platform + KYC + Refunds logic
 tests/security/    reserved for independent security tests (Playwright, API mode)
 docs/              ADDING_AN_APP.md, build-log/
@@ -167,6 +176,92 @@ npx prisma db execute --stdin <<< "DELETE FROM \"AuditEvent\";"
 ```
 
 (`tests/unit/audit.test.ts` asserts this through both Prisma and raw SQL.)
+
+## Dispute Queue
+
+The second app on the platform: when a customer disputes a card payment with their bank we receive a
+chargeback with a response deadline. Analysts work the disputes assigned to them, review payment and
+customer details and propose either **accepting** the dispute (we lose the money) or **fighting** it
+(we submit evidence); every proposal needs the approver's sign-off. It reuses every platform control
+above — the only app-specific code is the data model, the workflow and the pages.
+
+**No full card numbers are stored.** The `Dispute` record keeps only `cardLast4` (four digits, not
+PII, shown in clear as `•••• 1234`); the PII fields are `cardholderName` and `customerEmail`, masked
+by default and revealed only with a reason (`pii.reveal`, audited). Full PANs would put the system in
+PCI DSS scope and the queue only ever needs the last four.
+
+Status flow: `NEW → IN_REVIEW → PENDING_APPROVAL → ACCEPTED | CHALLENGED` (return sends the dispute
+back to `IN_REVIEW`, keeping the proposal and evidence summary for revision). `ACCEPTED` = chargeback
+accepted, `CHALLENGED` = fight approved. Final statuses are set only inside the registered
+`disputes.decision` approval action. A `fight` proposal requires an evidence summary (20–4000
+characters); `accept` does not.
+
+Deadlines: every dispute has a `respondBy` timestamp. The queue is sorted by deadline (soonest first)
+and flags each open dispute as **Overdue** (deadline passed), **Due soon** (within 72 h) or **On
+track**; closed disputes show **Closed**. The flag is derived at read time and can be filtered
+(`?due=overdue|due_soon|on_track`). Overdue disputes can still be worked and decided — there is no
+automatic expiry.
+
+| Role     | Disputes permissions                                | In the browser                                                                   |
+| -------- | --------------------------------------------------- | -------------------------------------------------------------------------------- |
+| analyst  | `disputes.dispute.read`, `disputes.dispute.work`    | own disputes only (404 otherwise); start review, propose accept/fight; reveal PII |
+| approver | `disputes.dispute.read`, `disputes.dispute.decide`  | all disputes; confirm/return proposals in **Approvals**; reveal PII               |
+| admin    | `disputes.dispute.read`, `disputes.dispute.assign`  | all disputes; assign `NEW`/`IN_REVIEW` disputes to analysts; no reveal, no decide |
+| auditor  | `disputes.dispute.read`                             | all disputes (masked), audit log; no actions                                     |
+
+API (every route is one `secureHandler` call; PII masked except on `reveal`):
+
+| Method | Path                               | Permission                | Notes                                                                    |
+| ------ | ---------------------------------- | ------------------------- | ------------------------------------------------------------------------ |
+| GET    | `/api/disputes?status=&due=`       | `disputes.dispute.read`   | scoped by `visibleWhere`, sorted by `respondBy`, `dueState` per row      |
+| GET    | `/api/disputes/:id`                | `disputes.dispute.read`   | 404 outside scope; includes audit trail and approval requests            |
+| GET    | `/api/disputes/analysts`           | `disputes.dispute.assign` | analysts a dispute can be assigned to                                    |
+| POST   | `/api/disputes/:id/assign`         | `disputes.dispute.assign` | `{ analystId }`, `NEW`/`IN_REVIEW` only                                  |
+| POST   | `/api/disputes/:id/start-review`   | `disputes.dispute.work`   | `NEW → IN_REVIEW`                                                        |
+| POST   | `/api/disputes/:id/propose`        | `disputes.dispute.work`   | `{ proposal: "accept"\|"fight", note, evidenceSummary? }` → `PENDING_APPROVAL` + approval request, one transaction |
+| POST   | `/api/disputes/:id/reveal`         | `pii.reveal`              | `{ field: "cardholderName"\|"customerEmail", reason ≥ 10 chars }`, audited `pii.reveal` |
+| POST   | `/api/approvals/:id/decide`        | `disputes.dispute.decide` | shared inbox route; `confirm` → `ACCEPTED`/`CHALLENGED`, `return` → `IN_REVIEW` |
+
+Audit actions: `disputes.dispute.assigned`, `.review_started`, `.proposed`, `.accepted`,
+`.challenged`, `.returned`, plus the platform's `approval.requested/confirmed/returned`,
+`pii.reveal` and `access.denied`.
+
+### Dispute Queue walkthrough
+
+1. **Login** as `alice@example.com` and open **Disputes**. The queue lists only her disputes, soonest
+   deadline first, with the Overdue / Due soon / On track badge and the time remaining. Cardholder
+   name and customer email are masked; the card shows only `•••• 1234`.
+2. **Record-level access**: open a dispute from Bob's queue (log in as Bob elsewhere) as Alice at
+   `/disputes/<id>` → "Not found" (404, never 403); the denial is audited as `access.denied`.
+3. **PII reveal**: on one of Alice's disputes click **Reveal** next to the cardholder name or
+   customer email. A reason shorter than 10 characters is rejected; a valid reason returns the value
+   and writes `pii.reveal`. Dan (admin) and Erin (auditor) have no reveal button and get 403 on the
+   API.
+4. **Maker step**: on a `NEW` dispute click **Start review**, then either **Propose accept** with a
+   note, or fill in the evidence summary and click **Propose fight**. Proposing fight without an
+   evidence summary is rejected. The dispute becomes `PENDING_APPROVAL` and an approval request is
+   created; Alice cannot decide it (no Approvals entry, `/api/approvals` → 403).
+5. **Checker**: log in as `carol@example.com`, open **Approvals** — the request links back to the
+   dispute and shows the proposal, note and evidence summary. **Confirm** sets `ACCEPTED` (accept)
+   or `CHALLENGED` (fight); **Return** sends it back to `IN_REVIEW`. A decision note is mandatory
+   and a request can be decided once.
+6. **Admin**: as `dan@example.com`, assign an unassigned `NEW` dispute to an analyst; the Decide
+   and Reveal controls are absent and the corresponding API calls return 403.
+7. **Audit**: as Dan or Erin open **Audit log** and filter by entity type `disputes.dispute` to see
+   the trail, including `pii.reveal`, `access.denied`, `approval.confirmed` and
+   `disputes.dispute.accepted` / `.challenged`. Then **Log out**.
+
+```bash
+curl -b jar "localhost:3000/api/disputes?due=due_soon"                      # alice: own disputes due within 72 h
+curl -b jar -X POST localhost:3000/api/disputes/<id>/start-review
+curl -b jar -X POST localhost:3000/api/disputes/<id>/propose -H 'content-type: application/json' \
+  -d '{"proposal":"fight","note":"Delivery confirmed","evidenceSummary":"Signed delivery confirmation and matching device fingerprint."}'
+curl -b jar -X POST localhost:3000/api/disputes/<id>/reveal -H 'content-type: application/json' \
+  -d '{"field":"customerEmail","reason":"Customer called about this chargeback"}'
+# as carol:
+curl -b carol -X POST localhost:3000/api/approvals/<requestId>/decide -H 'content-type: application/json' \
+  -d '{"decision":"confirm","note":"Evidence is sufficient to challenge"}'
+```
 
 ### 6. Refunds Dashboard (second app on the platform)
 
