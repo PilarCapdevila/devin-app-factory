@@ -2,161 +2,193 @@
 
 ## 1. Purpose
 
-A minimal internal-tools foundation for a fintech operations team. It replicates the core value of a platform like Microsoft Power Apps: secure-by-default building blocks (authentication, permissions, audit, approvals, PII protection) that every internal app inherits automatically.
+This prototype answers one question for a fintech operations team: **can a small engineering team build and maintain many internal tools with security equal to a commercial platform like Microsoft Power Apps?**
+
+It must produce evidence for three claims:
+1. **Security is inherited, not rebuilt.** Every app gets authentication, permissions, record-level access, PII protection, audit, and approvals from the platform, and cannot bypass them.
+2. **New apps are cheap.** An app contains only its business logic; everything else comes from the platform.
+3. **Changes are cheap and safe.** The code is simple, tested, and easy to modify.
 
 This repo contains:
-1. **The platform** (`src/platform`): shared security and UI building blocks.
-2. **One reference app** (`src/apps/kyc`): a KYC Review Queue built only from platform building blocks.
+- **The platform** (`src/platform`): shared security, workflow, and UI building blocks.
+- **One reference app** (`src/apps/kyc`): a KYC Review Queue built only from platform building blocks.
 
-Future apps (refunds dashboard, dispute queue, etc.) must be buildable on this platform without re-implementing any security.
+## 2. Design in one picture
 
-## 2. Principles
+```
+Browser ──► API route ──► secureHandler ──────────────────────────────────────► Response
+                          1. Authenticate (session)         → 401 if missing
+                          2. Authorize (declared permission) → 403 if not allowed
+                          3. Run app logic
+                             • reads go through the app's visibleWhere(user) → 404 outside scope
+                             • writes run in a transaction with writeAuditEvent()
+                             • final outcomes only via the approvals engine
+                          4. Mask every PII field in the response
+                             (unless the route is declared revealsPii)
+                          + Any denial for a logged-in user is audited
+
+Database: AuditEvent table is append-only (triggers reject UPDATE/DELETE)
+```
+
+**Security lives in four checkpoints: `secureHandler`, scoped queries, the approvals engine, and database triggers.** Apps contain business logic only. If a future app forgets something, the platform's defaults still protect it: missing permission fails closed, and PII is masked by default.
+
+## 3. What this replicates from Power Apps
+
+| Power Apps / Power Platform | This platform |
+|---|---|
+| Microsoft Entra ID sign-in | `auth.ts` (mock login now, SSO-ready interface) |
+| Dataverse security roles | `permissions.ts` (role → permission map) |
+| Dataverse row-level security | each app's `visibleWhere(user)`; out-of-scope records return 404 |
+| Dataverse column-level security | automatic PII masking in `secureHandler` + reveal-with-reason |
+| Dataverse auditing | `audit.ts` + append-only database triggers |
+| Power Automate approvals | `approvals.ts` + one approvals inbox across all apps |
+| Canvas app components | `src/platform/ui` |
+| Connectors | `src/connectors` (interface + mock implementation per external system) |
+| Solutions / ALM | Git, pull requests, automated tests |
+
+## 4. Rules for all code
 
 - **SECURITY.md overrides this document.** If anything conflicts, follow SECURITY.md.
-- Security is enforced in the platform, never in individual apps. An app cannot opt out.
-- Deny by default. Server-side enforcement only; hiding things in the UI is cosmetic.
-- Boring, simple technology. No extra services, no external network calls.
-- Prefer clarity over cleverness: a reviewer new to the codebase should understand it quickly.
+- **Build only what this spec lists.** Do not implement stretch items or extra features. In particular, the approvals engine supports exactly **one** decider per request.
+- Server-side enforcement only; hiding things in the UI is cosmetic.
+- Simple, readable code. A reviewer new to the codebase should understand the platform in 15 minutes.
+- External systems are reached only through `src/connectors/*` (none are needed for KYC).
 
-## 3. Stack
+## 5. Stack
 
-- Next.js (latest stable, App Router), TypeScript in strict mode
-- SQLite via Prisma (a single local file; no database server needed)
-- Tailwind CSS for styling
+- Next.js (latest stable, App Router), TypeScript strict mode
+- SQLite via Prisma (a local file; no database server)
+- Tailwind CSS
 - zod for input validation
 - Vitest for unit tests; Playwright (API testing mode) for security tests
-- Session auth: encrypted, httpOnly cookie (e.g. iron-session). Login page with seeded users. All auth logic lives behind `src/platform/auth.ts` so an OIDC/SSO provider (Okta, Microsoft Entra ID) can replace it later without touching app code.
+- Encrypted httpOnly session cookie (e.g. iron-session)
 
-## 4. Structure
+## 6. Structure
 
 ```
 src/
-  platform/              ← the foundation. Apps import from here.
-    auth.ts              session handling, getCurrentUser()
-    permissions.ts       role → permission map, can(), requirePermission()
-    handler.ts           secureHandler(): wraps EVERY server action / API route
-    audit.ts             append-only, hash-chained audit writer + verifyChain()
-    approvals.ts         generic maker-checker engine (reusable by any app)
-    pii.ts               server-side masking + revealField() with reason
-    ui/                  AppShell, DataTable, DetailPanel, MaskedField,
-                         ApprovalBar, AuditTrail
+  platform/
+    auth.ts          login, logout, getCurrentUser()
+    permissions.ts   role → permission map as plain data; can()
+    handler.ts       secureHandler() and error types
+    audit.ts         writeAuditEvent()
+    approvals.ts     registerApprovalAction(), createApprovalRequest(), decideApproval()
+    pii.ts           PII_FIELD_NAMES, maskValue(), revealField()
+    db.ts            Prisma client, withTransaction()
+    ui/              AppShell, DataTable, DetailPanel, MaskedField, ApprovalBar, AuditTrail
   apps/
-    kyc/                 KYC Review Queue (reference app)
-  app/                   Next.js pages + API routes — thin, delegate to src/apps/*
+    kyc/             KYC Review Queue: visibleWhere(), routes' logic, pages' components,
+                     approval action registration
+  connectors/        (empty for now; convention: interface + mock per external system)
+  app/               Next.js pages and API routes — thin, delegate to src/platform and src/apps
 prisma/
   schema.prisma
-  migrations/            includes raw SQL triggers making AuditEvent append-only
+  migrations/        includes raw SQL triggers making AuditEvent append-only
   seed.ts
 tests/
-  unit/                  Session A's own tests
-  security/              RESERVED for independent security tests written separately.
-                         Do not create or edit files here.
+  unit/              tests written during the build
+  security/          RESERVED for independent security tests. Do not create or edit files here.
 docs/
-  ADDING_AN_APP.md       how to build a new app on the platform
+  ADDING_AN_APP.md   step-by-step guide to building a new app on the platform
 ```
 
-**Rules:**
-- All data reads and writes go through JSON API routes under `src/app/api` (see section 9). Pages fetch from these routes. Do not use server actions.
-- Every API route must be wrapped in `secureHandler({ permission, ... })`. A handler without a declared permission must fail closed.
+## 7. Platform modules
 
-## 5. Roles and permissions
+**`handler.ts` — `secureHandler(options, fn)`**
+- Options: `permission` (required string), `revealsPii` (boolean, default false), `input` (optional zod schema).
+- Steps: authenticate → check permission → validate input → run `fn` → mask PII in the JSON response (unless `revealsPii`) → return.
+- A handler declared without `permission` must fail closed (return 403 for every call).
+- Exports error types that any code can throw: `ValidationError` (400), `ForbiddenError` (403), `NotFoundError` (404). The handler converts them to generic responses. For a logged-in user, 403 and 404 are audited as `access.denied`.
+
+**`permissions.ts`** — the role → permission map from section 8 as a single plain object, plus `can(user, permission)`.
+
+**`audit.ts` — `writeAuditEvent(tx, event)`** — writes an AuditEvent inside the caller's transaction. Every state-changing operation calls it in the same transaction as the change.
+
+**`approvals.ts`** — the only path to final outcomes.
+- `registerApprovalAction(action, { decidePermission, onConfirm(tx, request), onReturn(tx, request) })` — each app registers what happens when its request is confirmed or returned.
+- `createApprovalRequest(tx, { entityType, entityId, action, payload, requestedById, requestNote })`
+- `decideApproval({ requestId, deciderId, decision: "confirm" | "return", note })` — in one transaction: checks the request is `PENDING`, the decider is **not** the requester, the decider has the action's `decidePermission`, and a note is present; updates the request; calls `onConfirm` or `onReturn`; writes the audit event. Throws `ForbiddenError` or `ValidationError` otherwise.
+
+**`pii.ts`**
+- `PII_FIELD_NAMES`: the global list of sensitive field names (`dateOfBirth`, `nationalId`, `address`). Future apps add their fields here.
+- `maskValue(field, value)`: `nationalId` shows only the last 4 characters; other fields show `••••••`.
+- `revealField({ user, entityType, entityId, field, reason })`: checks `pii.reveal` permission, record access, and reason length; writes an audit event; returns the single value.
+
+**Platform pages** (available to every app automatically)
+- `/approvals` — inbox of pending requests the current user may decide, across all apps.
+- `/audit` — filterable audit log (admin, auditor).
+
+## 8. Roles and permissions
 
 Roles: `analyst`, `approver`, `admin`, `auditor`.
 
 | Permission | analyst | approver | admin | auditor |
 |---|---|---|---|---|
 | `kyc.case.read` | assigned cases only | all | all | all |
-| `kyc.case.recommend` (submit approve/reject recommendation) | assigned cases only | — | — | — |
-| `kyc.case.approve` (final decision on a recommendation) | — | ✓ | — | — |
+| `kyc.case.work` (start review, recommend) | assigned cases only | — | — | — |
+| `kyc.case.decide` (confirm or return a recommendation) | — | ✓ | — | — |
 | `kyc.case.assign` | — | — | ✓ | — |
 | `pii.reveal` | assigned cases only | ✓ | — | — |
 | `audit.read` | — | — | ✓ | ✓ |
 
-Note the deliberate separation of duties: **admin can assign work but cannot approve decisions or reveal PII.** Auditor is read-only.
+Deliberate separation of duties: **admin assigns work but cannot decide or reveal PII. Auditor is read-only.**
 
-The permission map must be defined in a single place (`permissions.ts`) as plain data so it is easy to review.
+"Assigned cases only" is enforced by the KYC app's `visibleWhere(user)`, which every KYC query uses.
 
-## 6. Data model
+## 9. Data model
 
 - **User**: id, email, name, role, passwordHash
-- **KycCase**: id, applicantName, dateOfBirth (PII), nationalId (PII), address (PII), riskScore (0–100), riskFlags (list), status, assignedToId, createdAt, updatedAt
-  - Status flow: `NEW → IN_REVIEW → PENDING_APPROVAL → APPROVED | REJECTED`, and `PENDING_APPROVAL → IN_REVIEW` when an approver returns a case.
-- **ApprovalRequest** (generic, reused by all future apps): id, entityType, entityId, action, payload (JSON), requestedById, requestedAt, requestNote, status (`PENDING | CONFIRMED | RETURNED`), decidedById, decidedAt, decisionNote
-- **AuditEvent**: id, timestamp (server time), actorId, actorRole, action, entityType, entityId, before (JSON), after (JSON), reason, prevHash, hash
+- **KycCase**: id, applicantName, dateOfBirth, nationalId, address, riskScore (0–100), riskFlags (list), status, assignedToId, createdAt, updatedAt
+  - Status flow: `NEW → IN_REVIEW → PENDING_APPROVAL → APPROVED | REJECTED`; a returned case goes `PENDING_APPROVAL → IN_REVIEW`.
+- **ApprovalRequest** (generic): id, entityType, entityId, action, payload (JSON), requestedById, requestedAt, requestNote, status (`PENDING | CONFIRMED | RETURNED`), decidedById, decidedAt, decisionNote
+- **AuditEvent**: id, timestamp (server time), actorId, actorRole, action, entityType, entityId, before (JSON), after (JSON), reason
 
-## 7. KYC Review Queue requirements
+## 10. KYC Review Queue
 
-**Queue page**
-- Table of cases the current user is allowed to see (record-level rules apply).
-- Filter by status and risk level; sort by risk score (highest first by default).
-- PII columns shown masked (e.g. `***-**-1234`).
+**Queue page** — cases visible to the user; filter by status and risk; sorted by risk score (highest first); PII masked.
 
-**Case detail page**
-- Applicant info with PII masked. Each PII field has a "Reveal" button that asks for a reason; the revealed value is shown only for that field, only in that view.
-- Risk score and risk flags.
-- Audit trail for this case (who did what, when).
-- Action bar that only shows actions the user is permitted to take (server still enforces).
+**Case detail page** — applicant details with PII masked and a "Reveal" button per field (asks for a reason; shows the value only in that view); risk score and flags; audit trail for the case; action bar showing only the actions the user may take.
 
 **Workflow**
 1. Admin assigns a `NEW` case to an analyst.
-2. Analyst clicks "Start review" (a POST, never triggered by just viewing the page) → status `IN_REVIEW`.
-3. Analyst submits a recommendation (approve or reject) with a note → creates an ApprovalRequest; status `PENDING_APPROVAL`.
-4. An approver (never the same person who requested) either **confirms** the recommendation (case becomes `APPROVED` or `REJECTED` accordingly) or **returns** it to the analyst with a note (case goes back to `IN_REVIEW`).
-5. Final status is set only by the approvals engine.
+2. Analyst clicks "Start review" → `IN_REVIEW`.
+3. Analyst submits a recommendation (`approve` or `reject`) with a note → creates an ApprovalRequest (action `kyc.decision`, payload `{ recommendation }`) → `PENDING_APPROVAL`.
+4. An approver confirms (case becomes `APPROVED` or `REJECTED` per the recommendation) or returns it with a note (case goes back to `IN_REVIEW`). This logic lives in the KYC app's registered `onConfirm` / `onReturn`.
 
-**Audit page** (admin, auditor)
-- Filterable list of all audit events.
-- "Verify integrity" button that runs `verifyChain()` and shows OK, or the first broken entry.
+## 11. API contract (must match exactly; independent tests are written against it)
 
-## 8. Seed data
+All routes are JSON. All except login require a session cookie.
 
-- Users (dev-only password from `.env`, see `.env.example`):
-  - alice@example.com — analyst
-  - bob@example.com — analyst
-  - carol@example.com — approver
-  - dan@example.com — admin
-  - erin@example.com — auditor
-- ~30 KYC cases with obviously fake data (use a fixed faker seed), varied risk scores and flags, mixed statuses, split between alice and bob, some unassigned.
-
-## 9. Contract (must match exactly — independent tests are written against it)
-
-**API routes** (all JSON; all except login require a session cookie)
-
-| Method & path | Body | Notes |
+| Method & path | Body | Permission / notes |
 |---|---|---|
 | `POST /api/auth/login` | `{ email, password }` | 200 + session cookie, or 401 |
 | `POST /api/auth/logout` | — | clears session |
-| `GET /api/kyc/cases` | — | cases visible to caller, PII masked |
-| `GET /api/kyc/cases/:id` | — | detail, PII masked; 404 if not visible to caller |
-| `POST /api/kyc/cases/:id/assign` | `{ analystId }` | admin |
-| `POST /api/kyc/cases/:id/start-review` | — | assigned analyst |
-| `POST /api/kyc/cases/:id/recommend` | `{ recommendation: "approve" \| "reject", note }` | assigned analyst; creates ApprovalRequest |
-| `POST /api/kyc/cases/:id/reveal` | `{ field: "dateOfBirth" \| "nationalId" \| "address", reason }` | returns `{ value }` for that one field |
-| `GET /api/approvals?status=PENDING` | — | approver |
-| `POST /api/approvals/:id/decide` | `{ decision: "confirm" \| "return", note }` | approver, never the requester |
-| `GET /api/audit` | query filters optional | admin, auditor |
-| `GET /api/audit/verify` | — | `{ ok: true }` or `{ ok: false, brokenEventId }` |
+| `GET /api/kyc/cases` | — | `kyc.case.read`; scoped; PII masked |
+| `GET /api/kyc/cases/:id` | — | `kyc.case.read`; 404 outside scope |
+| `POST /api/kyc/cases/:id/assign` | `{ analystId }` | `kyc.case.assign` |
+| `POST /api/kyc/cases/:id/start-review` | — | `kyc.case.work` |
+| `POST /api/kyc/cases/:id/recommend` | `{ recommendation: "approve" \| "reject", note }` | `kyc.case.work` |
+| `POST /api/kyc/cases/:id/reveal` | `{ field: "dateOfBirth" \| "nationalId" \| "address", reason }` | `pii.reveal`, `revealsPii`; returns `{ field, value }` |
+| `GET /api/approvals` | — | pending requests the caller may decide |
+| `POST /api/approvals/:id/decide` | `{ decision: "confirm" \| "return", note }` | the action's `decidePermission` |
+| `GET /api/audit` | optional query filters | `audit.read` |
 
-Status codes: 401 unauthenticated, 403 lacks permission, 404 record not visible to caller (S7), 400 invalid input.
+Status codes: 400 invalid input, 401 unauthenticated, 403 not permitted, 404 not found or outside scope.
 
-**Platform functions** (exported with these names from `src/platform`)
-- `createApprovalRequest(tx, { entityType, entityId, action, payload, requestedById, requestNote })`
-- `decideApproval({ requestId, deciderId, decision, note })` — throws `ForbiddenError` if `deciderId` equals the requester
-- `verifyChain(): Promise<{ ok: true } | { ok: false; brokenEventId: string }>`
-- `writeAuditEvent(tx, event)`
+**Test environment:** `npm run test:security` resets and seeds a separate database (`DATABASE_URL=file:./test.db`), starts the app on port 3100 via Playwright's `webServer` config, and runs `tests/security`. Seed data is deterministic. Tests may import platform functions and use Prisma directly against `test.db`.
 
-**Test environment**
-- `npm run test:security` resets and seeds a separate database (`DATABASE_URL=file:./test.db`), starts the app on port 3100 using Playwright's `webServer` config, and runs everything in `tests/security`.
-- Seed data is deterministic. Tests discover case IDs through the API (e.g. log in as alice, list her cases, then try one of those IDs as bob).
-- Tests may import the platform functions above and use Prisma directly against `test.db` (e.g. to attempt an UPDATE on AuditEvent).
+## 12. Seed data
 
-## 10. Definition of done
+- Users (dev-only password from `.env`; see `.env.example`): alice@example.com and bob@example.com (analyst), carol@example.com (approver), dan@example.com (admin), erin@example.com (auditor).
+- ~30 KYC cases with obviously fake data (fixed faker seed): varied risk scores and flags, split between alice and bob, a few unassigned, and at least one `PENDING_APPROVAL` case recommended by alice so the approvals inbox is not empty.
+
+## 13. Definition of done
 
 - From a clean clone: `npm install`, `npm run setup` (migrate + seed), `npm run dev` works.
-- `npm test`, `npm run lint`, and `npm run typecheck` all pass. `npm run test:security` is wired up and runs (the security tests themselves are added separately).
-- README includes: how to run, a short architecture overview, a **demo walkthrough** that shows each trust control in action (login, record-level access, PII reveal, maker-checker, audit integrity check), and a "Production path" section (see below).
-- `docs/ADDING_AN_APP.md` explains, step by step, how to add a new app using only platform building blocks.
+- `npm test`, `npm run lint`, `npm run typecheck` pass. `npm run test:security` is wired up and runs.
+- README: how to run; the section 2 diagram; a **demo walkthrough** showing each control (login, record-level access, PII masking and reveal, maker-checker in the approvals inbox, audit log and append-only protection); a "Production path" section.
+- `docs/ADDING_AN_APP.md`: a precise, step-by-step guide to adding a new app using only platform building blocks (declare permissions, write `visibleWhere`, add PII field names, register approval actions, wrap routes in `secureHandler`, reuse UI components, add unit tests). This document becomes the basis for building every future app.
 
-## 11. Out of scope (list in README under "Production path")
+## 14. Out of scope (list in README under "Production path")
 
-Real SSO/OIDC, Postgres, cloud deployment, anchoring the latest audit hash outside the database (see S12), encryption at rest with a managed key service, export of audit logs to a SIEM, rate limiting, user-management UI, data retention policies.
+Real SSO/OIDC, Postgres, cloud deployment and CI, tamper-evident hash chain on the audit log, encryption at rest with a managed key service, audit export to a SIEM, rate limiting, user-management UI, data retention policies, multi-step approvals.

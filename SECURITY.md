@@ -1,44 +1,36 @@
-# Security Requirements (non-negotiable)
+# Security Requirements
 
-This document overrides SPEC.md. Every rule has an ID. Tests in `tests/security/` must reference these IDs in their names (e.g. `S7: analyst cannot read a case assigned to someone else`). Every rule must have at least one test.
+This document overrides SPEC.md. Rules are in three tiers:
 
-## Authentication
+- **Must-prove (M):** the trust controls. Each must have at least one test in `tests/security/`, named with its ID (e.g. `M4: analyst gets 404 for a case assigned to someone else`).
+- **Hygiene (H):** must be followed; verified by code review, not individual tests.
+- **Stretch (X):** do not implement unless explicitly asked.
 
-- **S1.** Every page and server endpoint except `/login` requires an authenticated session. Unauthenticated page requests redirect to `/login`; unauthenticated API/server-action calls return 401.
-- **S2.** The session cookie is encrypted, `httpOnly`, `sameSite=lax`, `secure` in production, and expires after 8 hours.
-- **S3.** Passwords are hashed with bcrypt or argon2. Passwords and session contents are never logged.
-- **S4.** The session secret comes from an environment variable. The app refuses to start if it is missing or shorter than 32 characters.
+## Must-prove
 
-## Authorization
+- **M1. Authentication everywhere.** Every page and API route except `/login` and `POST /api/auth/login` requires a valid session. Unauthenticated API calls return 401; unauthenticated page requests redirect to `/login`.
+- **M2. Deny by default.** Every API route is wrapped in `secureHandler` with a declared permission. A handler with no declared permission returns 403 for every call.
+- **M3. Server-side permissions.** Every permission in the SPEC section 8 matrix is enforced on the server for every role. The role comes from the server-side session, never from client input.
+- **M4. Record-level access.** An analyst can only see or act on cases assigned to them. Other cases are absent from lists, and requesting one by ID returns 404 (not 403), so IDs cannot be probed.
+- **M5. Separation of duties.** Admin cannot decide approval requests or reveal PII. Only users with an action's `decidePermission` can decide it.
+- **M6. Maker-checker.** The requester of an approval request can never decide it, regardless of role. Enforced inside `decideApproval` (test it directly against that function).
+- **M7. Final outcomes only through approvals.** No route sets a final status (`APPROVED`, `REJECTED`) directly; only `decideApproval` can. Every decision requires a note.
+- **M8. Complete audit.** Every state change writes an audit event in the same transaction; if the audit write fails, the change is rolled back. Every PII reveal and every denied request (403/404) by a logged-in user is also audited. Each event records actor, actor role, action, entity type and ID, before and after state, reason, and server timestamp.
+- **M9. Append-only audit.** Database triggers reject any `UPDATE` or `DELETE` on the AuditEvent table.
+- **M10. PII masked by default.** No API response contains an unmasked PII field unless its route is declared `revealsPii`. Revealing requires `pii.reveal`, record-level access to that case, and a reason of at least 10 characters; it returns only that one field and is audited.
 
-- **S5.** Deny by default. Every API route is wrapped in `secureHandler` with a declared permission; a handler without one fails closed.
-- **S6.** Permissions are checked on the server for every request. The user's role is read from the server-side session, never from client input.
-- **S7.** Record-level access: an analyst can only read or act on cases assigned to them. Requesting another analyst's case by ID returns 404 (not 403), so case IDs cannot be probed.
-- **S8.** Separation of duties: admin cannot approve decisions or reveal PII. Only the `approver` role can make a final approval decision.
+## Hygiene
 
-## Audit
+- **H1.** Session cookie is encrypted, `httpOnly`, `sameSite=lax`, `secure` in production, and expires after 8 hours.
+- **H2.** Passwords are hashed with bcrypt or argon2; passwords and session contents are never logged.
+- **H3.** The session secret comes from an environment variable; the app refuses to start if it is missing or shorter than 32 characters.
+- **H4.** All inputs are validated with zod; unknown fields are rejected.
+- **H5.** No secrets in the repo. `.env` is git-ignored; `.env.example` lists required variables with placeholders.
+- **H6.** Errors returned to the browser are generic; details are logged server-side only.
+- **H7.** PII never appears in logs or error messages.
+- **H8.** State changes happen only through POST requests, never GET.
 
-- **S9.** Every state change writes an audit event in the **same database transaction**. If the audit write fails, the change is rolled back.
-- **S10.** Every PII reveal and every denied access attempt is also audited.
-- **S11.** The audit log is append-only: database triggers reject any `UPDATE` or `DELETE` on the AuditEvent table, and no application code path updates or deletes audit events.
-- **S12.** Hash chain: each event stores `hash = SHA-256(prevHash + canonical JSON of the event)`. `verifyChain()` detects any modified, inserted, or removed event and reports the first broken entry. (Known limit: removing the most recent events cannot be detected by the chain alone. S11 blocks deletion; the production fix, periodically anchoring the latest hash outside the database, is listed under Production path.)
-- **S13.** Each audit event records actor, actor role, action, entity type and ID, before and after state, reason (if any), and server-side timestamp.
+## Stretch (do not implement unless asked)
 
-## Maker-checker (approvals)
-
-- **S14.** The person who created an approval request can never decide it, regardless of their role. Enforced on the server inside `decideApproval` (test it directly against that function, since in the KYC app only analysts create requests).
-- **S15.** Final statuses (`APPROVED`, `REJECTED`) can only be set through the approvals engine. There is no endpoint that sets these statuses directly.
-- **S16.** Every approval decision requires a note.
-
-## PII protection
-
-- **S17.** PII fields (date of birth, national ID, address) are masked on the server before being sent to the browser. Unmasked values are never included in page data or API responses unless explicitly revealed.
-- **S18.** Revealing a field requires the `pii.reveal` permission, record-level access to that case, and a reason of at least 10 characters. It returns only that one field and is audited (S10).
-- **S19.** PII never appears in application logs or error messages.
-
-## General
-
-- **S20.** All inputs are validated with zod schemas; unknown fields are rejected.
-- **S21.** No secrets in the repo. `.env` is git-ignored; `.env.example` documents required variables with placeholder values.
-- **S22.** Errors returned to the browser are generic. Details are logged server-side only (without PII, per S19).
-- **S23.** State-changing operations happen only via POST requests or server actions, never via GET.
+- **X1.** Tamper-evident hash chain on audit events with a verification endpoint.
+- **X2.** Real SSO via OIDC.
