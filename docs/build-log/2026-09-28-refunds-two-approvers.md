@@ -8,7 +8,7 @@ applies to requests already pending. Supersedes the "exactly one decider" rule a
 approvals" out-of-scope item in SPEC.md and the playbook. KYC, Disputes and every other app must
 behave exactly as before.
 
-Start: 2026-09-28 ~19:40 UTC (plan sent and approved before coding). End: 2026-09-28 20:35 UTC (PR opened; browser testing followed).
+Start: 2026-09-28 ~19:40 UTC (plan sent and approved before coding). End: 2026-09-28 20:45 UTC (PR #6 opened, browser test done; CI watched afterwards).
 
 ## Where the change went, and why
 
@@ -55,6 +55,6 @@ Not changed: `tests/security/*` (independent suite), KYC and Disputes apps, `sec
 - `npm run build` — succeeds.
 - `npm run test:security` — 175 passed (M1–M10, Playwright against a fresh `test.db`).
 - Branch is based on `origin/main` at `7a764cb` (Merge pull request #5 — disputes), verified with `git merge-base --is-ancestor` just before pushing.
-- Browser test (testing agent, recorded): see the PR for the result of the two-approver flow, a single-approval refund and the Disputes regression check.
+- Browser test (testing agent, recorded; evidence on PR #6): two-approver flow ($2,500: 0 of 2 → Carol confirms → 1 of 2, request leaves her inbox, no decide bar for her → Grace sees "1 of 2 · confirmed by Carol Approver" → issues; Decision panel shows Grace, 2 of 2, both approvers; audit requested → step_confirmed → confirmed), exactly $2,000.00 issued on Carol's single approval with no progress label, $3,000 returned by Grace after Carol's confirmation with no issuance, Disputes decided in one step as before, KYC and Disputes inbox items without progress label. All passed.
 
 ACUs used: (to be added)
