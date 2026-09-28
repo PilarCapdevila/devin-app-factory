@@ -5,7 +5,7 @@
   "Build a new internal app"), branch `disputes-swe2`, draft PR "Disputes (SWE-2 experiment)".
   Independent build from `main` only — no other disputes/chargeback branch or PR was consulted.
 - **Start:** 2026-09-28 ~17:51 UTC
-- **End:** (in progress)
+- **End:** 2026-09-28 ~18:10 UTC (~20 min; plus ~35 min delegated browser testing)
 
 ## What was built
 
@@ -48,6 +48,10 @@
 - `npm run build`: clean (all `/disputes` pages + `/api/disputes*` routes listed).
 - `npm run test:security`: `tests/security/playwright.config.ts does not exist` — expected
   until the independent security suite lands on `main`.
-- Browser walkthrough per role (alice, bob, carol, dan, erin): (pending)
+- Browser walkthrough per role (alice, bob, carol, dan, erin): all 10 checks passed — scoped
+  queues and 404 outside scope, masked PII + reasoned reveal, maker step, maker cannot decide,
+  confirm/return in `/approvals`, audit log entries (`pii.reveal`, `access.denied`,
+  `approval.confirmed`, `disputes.dispute.*`), wrong-password handling, logout,
+  unauthenticated redirect/401. Evidence (recording + screenshots) posted on the PR.
 
 ACUs used: (to be added)
