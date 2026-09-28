@@ -1,8 +1,9 @@
-# Internal tools platform + KYC Review Queue
+# Internal tools platform + KYC Review Queue + Disputes
 
-A prototype of a secure internal-tools platform (the "app factory") and its first app, a KYC Review
-Queue. The platform owns authentication, authorization, record-level access, PII masking, auditing
-and maker-checker approvals; apps contain business logic only. `SPEC.md` is the product/architecture
+A prototype of a secure internal-tools platform (the "app factory") and its apps: a KYC Review
+Queue and a chargeback Disputes queue. The platform owns authentication, authorization, record-level
+access, PII masking, auditing and maker-checker approvals; apps contain business logic only.
+`SPEC.md` is the product/architecture
 spec and `SECURITY.md` lists the non-negotiable controls (M1–M10, H1–H8).
 
 ## How to run
@@ -19,11 +20,11 @@ Sign in with any seeded user (password `password123`, or `SEED_PASSWORD` from `.
 
 | User                | Role     | Can                                                                  |
 | ------------------- | -------- | -------------------------------------------------------------------- |
-| `alice@example.com` | analyst  | see and work **her own** cases, reveal PII with a reason             |
-| `bob@example.com`   | analyst  | same, for his cases                                                  |
-| `carol@example.com` | approver | see all cases, decide approval requests, reveal PII                  |
-| `dan@example.com`   | admin    | see all cases, assign cases, read the audit log (no PII reveal)      |
-| `erin@example.com`  | auditor  | see all cases (masked), read the audit log                           |
+| `alice@example.com` | analyst  | see and work **her own** KYC cases and disputes, reveal PII with a reason |
+| `bob@example.com`   | analyst  | same, for his cases and disputes                                     |
+| `carol@example.com` | approver | see all cases and disputes, decide approval requests, reveal PII     |
+| `dan@example.com`   | admin    | see all cases and disputes, assign them, read the audit log (no PII reveal) |
+| `erin@example.com`  | auditor  | see all cases and disputes (masked), read the audit log              |
 
 Other commands:
 
@@ -69,6 +70,7 @@ a route without a declared permission fails closed (403), and PII is masked by d
 ```
 src/platform/      auth, session, permissions, handler, audit, approvals, pii, db + ui/ components
 src/apps/kyc/      KYC app: visibleWhere, cases (workflow), approval action, schemas, ui/
+src/apps/disputes/ Disputes app: visibleWhere, disputes (workflow), approval action, schemas, ui/
 src/apps/          register.ts (app registrations loaded at server start), links.ts (entity → page)
 src/app/           Next.js routes: pages (login, kyc, approvals, audit) and api/ (section 11 contract)
 src/proxy.ts       unauthenticated → 401 (API) / redirect to /login (pages)
@@ -164,6 +166,38 @@ npx prisma db execute --stdin <<< "DELETE FROM \"AuditEvent\";"
 ```
 
 (`tests/unit/audit.test.ts` asserts this through both Prisma and raw SQL.)
+
+### 6. Disputes — same controls, second app
+
+The Disputes queue (`/disputes`) repeats the whole walkthrough on a second domain. Analysts work the
+disputes assigned to them — a merchant chargeback with an amount, reason code, customer and respond-by
+deadline — and recommend either **accept** (take the loss) or **contest** (fight it with evidence);
+an approver confirms or returns the recommendation in the shared `/approvals` inbox. The queue sorts
+nearest-deadline-first and highlights overdue disputes in red.
+
+As alice: open `/disputes` — only her disputes are listed; a dispute assigned to bob returns **404**
+by id. Customer email and address are masked; **Reveal** requires a reason and writes a `pii.reveal`
+event. On a `NEW` dispute: **Start review** → **Recommend accept/contest** with a note →
+`PENDING_APPROVAL`. As carol: `/approvals` shows the request; **Confirm** sets `ACCEPTED`/`CONTESTED`,
+**Return** sends it back to `IN_REVIEW`. Admin (dan) assigns disputes via the detail page; auditor
+(erin) sees everything masked.
+
+| Method & path | Body | Permission |
+|---|---|---|
+| `GET /api/disputes` | query: `status`, `dueWithinDays` | `disputes.dispute.read`; scoped; masked |
+| `GET /api/disputes/:id` | — | `disputes.dispute.read`; 404 outside scope |
+| `GET /api/disputes/analysts` | — | `disputes.dispute.assign` |
+| `POST /api/disputes/:id/assign` | `{ analystId }` | `disputes.dispute.assign` |
+| `POST /api/disputes/:id/start-review` | — | `disputes.dispute.work` |
+| `POST /api/disputes/:id/recommend` | `{ recommendation: "accept" \| "contest", note }` | `disputes.dispute.work` |
+| `POST /api/disputes/:id/reveal` | `{ field: "customerEmail" \| "customerAddress", reason }` | `pii.reveal`, `revealsPii` |
+
+```bash
+curl -b jar localhost:3000/api/disputes                                   # alice's queue, masked
+curl -b jar -X POST localhost:3000/api/disputes/<id>/start-review
+curl -b jar -X POST localhost:3000/api/disputes/<id>/recommend -H 'content-type: application/json' \
+  -d '{"recommendation":"contest","note":"Delivery evidence available"}'
+```
 
 ## Production path
 

@@ -4,10 +4,10 @@ import { ROLE_PERMISSIONS, ROLES, can, isRole } from "@/platform/permissions";
 describe("permissions matrix (SPEC section 8)", () => {
   it("matches the spec exactly", () => {
     expect(ROLE_PERMISSIONS).toEqual({
-      analyst: ["kyc.case.read", "kyc.case.work", "pii.reveal"],
-      approver: ["kyc.case.read", "kyc.case.decide", "pii.reveal"],
-      admin: ["kyc.case.read", "kyc.case.assign", "audit.read"],
-      auditor: ["kyc.case.read", "audit.read"],
+      analyst: ["kyc.case.read", "kyc.case.work", "disputes.dispute.read", "disputes.dispute.work", "pii.reveal"],
+      approver: ["kyc.case.read", "kyc.case.decide", "disputes.dispute.read", "disputes.dispute.decide", "pii.reveal"],
+      admin: ["kyc.case.read", "kyc.case.assign", "disputes.dispute.read", "disputes.dispute.assign", "audit.read"],
+      auditor: ["kyc.case.read", "disputes.dispute.read", "audit.read"],
     });
   });
 

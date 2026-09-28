@@ -16,6 +16,7 @@ model User {
   passwordHash String
 
   assignedCases    KycCase[]         @relation("AssignedCases")
+  assignedDisputes Dispute[]         @relation("AssignedDisputes")
   approvalRequests ApprovalRequest[] @relation("RequestedApprovals")
   approvalDecided  ApprovalRequest[] @relation("DecidedApprovals")
 }
@@ -37,6 +38,29 @@ model KycCase {
 
   @@index([assignedToId])
   @@index([status])
+}
+
+// Status: NEW | IN_REVIEW | PENDING_APPROVAL | ACCEPTED | CONTESTED
+model Dispute {
+  id               String   @id @default(cuid())
+  merchantName     String
+  amountMinor      Int      // minor currency units (e.g. cents)
+  currency         String
+  reasonCode       String
+  customerName     String
+  customerEmail    String // PII
+  customerAddress  String // PII
+  cardLast4        String // last 4 digits only — a full PAN is never stored (PCI DSS scope)
+  responseDeadline DateTime
+  status           String   @default("NEW")
+  assignedToId     String?
+  assignedTo       User?    @relation("AssignedDisputes", fields: [assignedToId], references: [id])
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([assignedToId])
+  @@index([status])
+  @@index([responseDeadline])
 }
 
 // Status: PENDING | CONFIRMED | RETURNED
