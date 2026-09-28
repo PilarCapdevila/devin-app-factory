@@ -19,7 +19,9 @@ export async function api<T>(path: string, init?: { method?: "GET" | "POST"; bod
   });
   const data = (await response.json().catch(() => ({}))) as { error?: string };
   if (!response.ok) {
-    if (response.status === 401 && typeof window !== "undefined") window.location.assign(new URL("/login", window.location.origin));
+    if (response.status === 401 && typeof window !== "undefined" && window.location.pathname !== "/login") {
+      window.location.assign(new URL("/login", window.location.origin));
+    }
     throw new ApiError(response.status, data.error ?? `Request failed (${response.status})`);
   }
   return data as T;
