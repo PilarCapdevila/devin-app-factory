@@ -1,6 +1,7 @@
 import { faker } from "@faker-js/faker";
 import bcrypt from "bcryptjs";
 import type { PrismaClient } from "../src/generated/prisma/client";
+import { seedDisputes } from "./seed-disputes";
 
 const RISK_FLAGS = ["pep", "sanctions_near_match", "high_risk_country", "adverse_media", "unusual_volume", "document_mismatch"];
 
@@ -191,7 +192,9 @@ export async function seedDatabase(prisma: PrismaClient) {
   });
 
   const refundCount = await seedRefunds(prisma, users);
-  return { users, caseCount: CASE_COUNT + 1, refundCount };
+  const { disputeCount } = await seedDisputes(prisma, users);
+
+  return { users, caseCount: CASE_COUNT + 1, refundCount, disputeCount };
 }
 
 /**

@@ -12,10 +12,10 @@ export function isRole(value: string): value is Role {
  * "Assigned cases only" is not expressed here; it is enforced by each app's visibleWhere(user).
  */
 export const ROLE_PERMISSIONS = {
-  analyst: ["kyc.case.read", "kyc.case.work", "pii.reveal"],
-  approver: ["kyc.case.read", "kyc.case.decide", "pii.reveal", "refunds.refund.read", "refunds.refund.decide"],
-  admin: ["kyc.case.read", "kyc.case.assign", "audit.read", "refunds.refund.read"],
-  auditor: ["kyc.case.read", "audit.read", "refunds.refund.read"],
+  analyst: ["kyc.case.read", "kyc.case.work", "pii.reveal", "disputes.dispute.read", "disputes.dispute.work"],
+  approver: ["kyc.case.read", "kyc.case.decide", "pii.reveal", "refunds.refund.read", "refunds.refund.decide", "disputes.dispute.read", "disputes.dispute.decide"],
+  admin: ["kyc.case.read", "kyc.case.assign", "audit.read", "refunds.refund.read", "disputes.dispute.read", "disputes.dispute.assign"],
+  auditor: ["kyc.case.read", "audit.read", "refunds.refund.read", "disputes.dispute.read"],
   support_agent: ["refunds.refund.read", "refunds.refund.request"],
 } as const satisfies Record<Role, readonly string[]>;
 
@@ -25,7 +25,7 @@ export type Permission = (typeof ROLE_PERMISSIONS)[Role][number];
  * Every `decidePermission` used by a registered approval action. The shared approvals inbox
  * and decide routes are gated on "any of" these; add your app's decide permission here.
  */
-export const DECIDE_PERMISSIONS: readonly Permission[] = ["kyc.case.decide", "refunds.refund.decide"];
+export const DECIDE_PERMISSIONS: readonly Permission[] = ["kyc.case.decide", "refunds.refund.decide", "disputes.dispute.decide"];
 
 export function can(user: { role: Role } | null | undefined, permission: Permission): boolean {
   if (!user) return false;
