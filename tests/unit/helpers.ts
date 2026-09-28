@@ -13,6 +13,7 @@ export const carol = () => userByEmail("carol@example.com");
 export const dan = () => userByEmail("dan@example.com");
 export const erin = () => userByEmail("erin@example.com");
 export const frank = () => userByEmail("frank@example.com");
+export const grace = () => userByEmail("grace@example.com");
 
 /** Creates an isolated case so tests do not depend on the seed's state machine positions. */
 export async function createCase(overrides: { status?: string; assignedToId?: string | null } = {}) {

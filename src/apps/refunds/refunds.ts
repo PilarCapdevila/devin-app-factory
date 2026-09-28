@@ -1,5 +1,5 @@
 import type { Prisma, Refund } from "@/generated/prisma/client";
-import { createApprovalRequest } from "@/platform/approvals";
+import { createApprovalRequest, requiredApprovalsFor } from "@/platform/approvals";
 import { listAuditEvents, writeAuditEvent } from "@/platform/audit";
 import type { SessionUser } from "@/platform/auth";
 import { prisma, withTransaction, type Tx } from "@/platform/db";
@@ -62,13 +62,19 @@ export async function getRefund(user: SessionUser, id: string) {
     prisma.approvalRequest.findMany({
       where: { entityType: REFUND_ENTITY_TYPE, entityId: id },
       orderBy: { requestedAt: "desc" },
-      include: { requestedBy: userSelect, decidedBy: userSelect },
+      include: {
+        requestedBy: userSelect,
+        decidedBy: userSelect,
+        confirmations: { orderBy: { confirmedAt: "asc" }, include: { approver: userSelect } },
+      },
     }),
   ]);
   return {
     ...serializeRefund(refund),
     auditTrail,
-    approvalRequests: approvalRequests.map((r) => ({ ...r, payload: JSON.parse(r.payload) as unknown })),
+    approvalRequests: await Promise.all(
+      approvalRequests.map(async (r) => ({ ...r, payload: JSON.parse(r.payload) as unknown, requiredApprovals: await requiredApprovalsFor(r) })),
+    ),
   };
 }
 

@@ -49,7 +49,7 @@ Database: AuditEvent table is append-only (triggers reject UPDATE/DELETE)
 ## 4. Rules for all code
 
 - **SECURITY.md overrides this document.** If anything conflicts, follow SECURITY.md.
-- **Build only what this spec lists.** Do not implement stretch items or extra features. In particular: the approvals engine supports exactly **one** decider per request, with no multi-step or multi-approver logic; there is no audit hash chain; there is no SSO/OIDC.
+- **Build only what this spec lists.** Do not implement stretch items or extra features. In particular: the approvals engine records one confirmation per approver and an action may require more than one (`requiredApprovals`, default 1, currently used only by refunds over $2,000.00); there is no other workflow logic (no delegation, escalation or sequencing), no audit hash chain and no SSO/OIDC.
 - Server-side enforcement only; hiding things in the UI is cosmetic.
 - Simple, readable code. A reviewer new to the codebase should understand the platform in 15 minutes.
 - External systems are reached only through `src/connectors/*` (none are needed for KYC).
@@ -108,9 +108,10 @@ docs/
 **`audit.ts` — `writeAuditEvent(tx, event)`** — writes an AuditEvent inside the caller's transaction. Every state-changing operation calls it in the same transaction as the change.
 
 **`approvals.ts`** — the only path to final outcomes.
-- `registerApprovalAction(action, { decidePermission, onConfirm(tx, request), onReturn(tx, request) })` — each app registers what happens when its request is confirmed or returned.
+- `registerApprovalAction(action, { decidePermission, requiredApprovals?(request), onConfirm(tx, request), onReturn(tx, request) })` — each app registers what happens when its request is confirmed or returned. `requiredApprovals` is optional and defaults to 1; it is evaluated per request at decision time (from the stored payload), so a changed rule applies to requests that are already pending.
 - `createApprovalRequest(tx, { entityType, entityId, action, payload, requestedById, requestNote })`
-- `decideApproval({ requestId, deciderId, decision: "confirm" | "return", note })` — in one transaction: checks the request is `PENDING`, the decider is **not** the requester, the decider has the action's `decidePermission`, and a note is present; updates the request; calls `onConfirm` or `onReturn`; writes the audit event. Throws `ForbiddenError` or `ValidationError` otherwise.
+- `decideApproval({ requestId, deciderId, decision: "confirm" | "return", note })` — in one transaction: checks the request is `PENDING`, the decider is **not** the requester and has **not** already confirmed this request, the decider has the action's `decidePermission`, and a note is present. `confirm` records an `ApprovalConfirmation` for the decider; while fewer than `requiredApprovals` different approvers have confirmed, the request stays `PENDING`, `onConfirm` is not called and `approval.step_confirmed` is audited. The confirmation that reaches `requiredApprovals` (or any `return`, at any step) updates the request (`decidedById` = that approver), calls `onConfirm` or `onReturn` and writes `approval.confirmed` / `approval.returned`. Throws `ForbiddenError` or `ValidationError` otherwise. With the default of 1 this is the single-decision flow KYC and Disputes use.
+- `requiredApprovalsFor(request)` — the count an app's UI needs to show progress ("1 of 2 approvals").
 
 **`pii.ts`**
 - `PII_FIELD_NAMES`: the global list of sensitive field names (`dateOfBirth`, `nationalId`, `address`). Future apps add their fields here.
@@ -118,7 +119,7 @@ docs/
 - `revealField({ user, entityType, entityId, field, reason })`: checks `pii.reveal` permission, record access, and reason length; writes an audit event; returns the single value.
 
 **Platform pages** (available to every app automatically)
-- `/approvals` — inbox of pending requests the current user may decide, across all apps.
+- `/approvals` — inbox of pending requests the current user may decide, across all apps: never their own, and not the ones they have already confirmed. Requests needing more than one approval show their progress ("1 of 2 approvals") and who has confirmed.
 - `/audit` — filterable audit log (admin, auditor).
 
 ## 8. Roles and permissions
@@ -143,7 +144,8 @@ Deliberate separation of duties: **admin assigns work but cannot decide or revea
 - **User**: id, email, name, role, passwordHash
 - **KycCase**: id, applicantName, dateOfBirth, nationalId, address, riskScore (0–100), riskFlags (list), status, assignedToId, createdAt, updatedAt
   - Status flow: `NEW → IN_REVIEW → PENDING_APPROVAL → APPROVED | REJECTED`; a returned case goes `PENDING_APPROVAL → IN_REVIEW`.
-- **ApprovalRequest** (generic): id, entityType, entityId, action, payload (JSON), requestedById, requestedAt, requestNote, status (`PENDING | CONFIRMED | RETURNED`), decidedById, decidedAt, decisionNote
+- **ApprovalRequest** (generic): id, entityType, entityId, action, payload (JSON), requestedById, requestedAt, requestNote, status (`PENDING | CONFIRMED | RETURNED`), decidedById, decidedAt, decisionNote. `decidedById` is the approver whose confirmation completed the request (or who returned it).
+- **ApprovalConfirmation** (generic): id, requestId, approverId, confirmedAt, note; unique per (requestId, approverId). One row per approver who confirmed, including the final one.
 - **AuditEvent**: id, timestamp (server time), actorId, actorRole, action, entityType, entityId, before (JSON), after (JSON), reason
 
 ## 10. KYC Review Queue
@@ -182,7 +184,7 @@ Status codes: 400 invalid input, 401 unauthenticated, 403 not permitted, 404 not
 
 ## 12. Seed data
 
-- Users (dev-only password from `.env`; see `.env.example`): alice@example.com and bob@example.com (analyst), carol@example.com (approver), dan@example.com (admin), erin@example.com (auditor).
+- Users (dev-only password from `.env`; see `.env.example`): alice@example.com and bob@example.com (analyst), carol@example.com and grace@example.com (approver), dan@example.com (admin), erin@example.com (auditor), frank@example.com (support_agent).
 - ~30 KYC cases with obviously fake data (fixed faker seed): varied risk scores and flags, split between alice and bob, a few unassigned, and at least one `PENDING_APPROVAL` case recommended by alice so the approvals inbox is not empty.
 
 ## 13. Definition of done
@@ -196,4 +198,4 @@ Status codes: 400 invalid input, 401 unauthenticated, 403 not permitted, 404 not
 
 ## 14. Out of scope (list in README under "Production path")
 
-Real SSO/OIDC, Postgres, cloud deployment and CI, tamper-evident hash chain on the audit log, encryption at rest with a managed key service, audit export to a SIEM, rate limiting, user-management UI, data retention policies, multi-step approvals.
+Real SSO/OIDC, Postgres, cloud deployment and CI, tamper-evident hash chain on the audit log, encryption at rest with a managed key service, audit export to a SIEM, rate limiting, user-management UI, data retention policies, approval workflow features beyond a required number of distinct confirmations (delegation, escalation, ordered approver chains).

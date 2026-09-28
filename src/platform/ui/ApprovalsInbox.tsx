@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { entityHref } from "@/apps/links";
 import { ApprovalBar } from "./ApprovalBar";
-import { api, formatDate } from "./client";
+import { api, approvalProgressLabel, formatDate } from "./client";
 
 type PendingRequest = {
   id: string;
@@ -15,6 +15,8 @@ type PendingRequest = {
   requestNote: string;
   requestedAt: string;
   requestedBy: { id: string; name: string; email: string };
+  requiredApprovals: number;
+  confirmations: { id: string; confirmedAt: string; approver: { id: string; name: string; email: string } }[];
 };
 
 /** Platform page: pending requests across all apps that the current user may decide. */
@@ -63,6 +65,12 @@ export function ApprovalsInbox() {
               <p className="mt-1">
                 <span className="text-slate-500">Note:</span> {request.requestNote}
               </p>
+              {approvalProgressLabel(request) && (
+                <p className="mt-2 text-amber-800">
+                  {approvalProgressLabel(request)}
+                  {request.confirmations.length > 0 && <> · confirmed by {request.confirmations.map((c) => c.approver.name).join(", ")}</>}
+                </p>
+              )}
             </section>
             <ApprovalBar
               title="Decide"

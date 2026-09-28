@@ -23,6 +23,7 @@ Sign in with any seeded user (password `password123`, or `SEED_PASSWORD` from `.
 | `alice@example.com` | analyst  | see and work **her own** cases, reveal PII with a reason             |
 | `bob@example.com`   | analyst  | same, for his cases                                                  |
 | `carol@example.com` | approver | see all cases, decide approval requests, reveal PII; see all refunds and confirm/return refund requests |
+| `grace@example.com` | approver | same as Carol — the second approver needed for refunds over $2,000.00 |
 | `dan@example.com`   | admin    | see all cases, assign cases, read the audit log (no PII reveal); see all refunds (read-only, cannot decide) |
 | `erin@example.com`  | auditor  | see all cases (masked), read the audit log; see all refunds (masked, read-only) |
 | `frank@example.com` | support_agent | see all refunds and create refund requests (no KYC access, no PII reveal) |
@@ -146,9 +147,9 @@ The case becomes `PENDING_APPROVAL`; Alice cannot decide it herself — the appr
 recommendation and the note. Choose **Confirm** or **Return** — a decision note is mandatory. On
 confirm the case becomes `APPROVED`/`REJECTED`; on return it goes back to `IN_REVIEW`. The final
 status is changed only inside the approval engine's registered `kyc.decision` callback: there is no
-route that sets it directly. Trying to decide a request twice is rejected (a request has exactly one
-decider), and if the requester and decider were the same user the engine returns 403 even for an
-approver.
+route that sets it directly. Trying to decide a request twice is rejected (a KYC request needs
+exactly one decider — only refunds over $2,000.00 ask for two), and if the requester and decider were
+the same user the engine returns 403 even for an approver.
 
 ```bash
 curl -b jar -X POST localhost:3000/api/kyc/cases/<id>/start-review
@@ -265,11 +266,13 @@ curl -b carol -X POST localhost:3000/api/approvals/<requestId>/decide -H 'conten
 
 ### 6. Refunds Dashboard (second app on the platform)
 
-Support agents request refunds on customer payments; an approver confirms or returns each request;
-only a confirmation issues the refund, through the payments connector in `src/connectors/payments.ts`
-(mock implementation that records every call in the `MockPaymentCall` table). Refund status is
-`PENDING_APPROVAL → ISSUED | RETURNED`; a returned refund is final and the agent may request again for
-the same payment.
+Support agents request refunds on customer payments; approvers confirm or return each request; only
+the final confirmation issues the refund, through the payments connector in `src/connectors/payments.ts`
+(mock implementation that records every call in the `MockPaymentCall` table). Refunds of $2,000.00 or
+less need one approver; refunds **over** $2,000.00 need two different approvers (neither may be the
+requester) — the rule is read at decision time, so it also applies to requests that were pending
+before it shipped. Refund status is `PENDING_APPROVAL → ISSUED | RETURNED`; a returned refund is final
+and the agent may request again for the same payment.
 
 | Method | Path | Permission | Who |
 | --- | --- | --- | --- |
@@ -278,7 +281,7 @@ the same payment.
 | `GET` | `/api/refunds/:id` | `refunds.refund.read` | refund + approval requests + audit trail |
 | `POST` | `/api/refunds` | `refunds.refund.request` | support_agent only — the maker step |
 | `POST` | `/api/refunds/:id/reveal` | `pii.reveal` (`revealsPii`) | approver (support_agent has no `pii.reveal`) |
-| `POST` | `/api/approvals/:id/decide` | `refunds.refund.decide` (via the shared inbox route) | approver only |
+| `POST` | `/api/approvals/:id/decide` | `refunds.refund.decide` (via the shared inbox route) | approver only; two different approvers over $2,000.00 |
 
 1. **Login and scope.** Sign in as `frank@example.com` — you land on `/refunds` (Frank has no KYC
    permission; the root and login redirects follow the permission matrix). The dashboard shows the
@@ -293,20 +296,32 @@ the same payment.
    same transaction. Frank cannot decide it: he has no approvals inbox and `/api/approvals/<id>/decide`
    returns 403 for the requester even if he had the permission (M5). A second request for the same
    payment while one is pending → 400.
-3. **Checker step.** Sign in as `carol@example.com`, open **Approvals** (or the refund page): the
-   request links to `/refunds/<id>`, where **Reveal** on the email requires a reason of 10+ characters
-   (`pii.reveal` audit event). **Confirm and issue refund** (note required) runs the `refunds.issue`
-   `onConfirm`: the connector is called with the approval request id as idempotency key, a
-   `MockPaymentCall` row is written, the refund becomes `ISSUED` and `refunds.refund.issued` +
-   `approval.confirmed` are audited — all in one transaction. **Return to support** makes it
-   `RETURNED` (`refunds.refund.returned`, no connector call). No route sets these statuses directly.
-4. **Read-only roles.** `dan@example.com` (admin) and `erin@example.com` (auditor) see the dashboard
+3. **Checker step (single approval, $2,000.00 or less).** Sign in as `carol@example.com`, open
+   **Approvals** (or the refund page): the request links to `/refunds/<id>`, where **Reveal** on the
+   email requires a reason of 10+ characters (`pii.reveal` audit event). **Confirm and issue refund**
+   (note required) runs the `refunds.issue` `onConfirm`: the connector is called with the approval
+   request id as idempotency key, a `MockPaymentCall` row is written, the refund becomes `ISSUED` and
+   `refunds.refund.issued` + `approval.confirmed` are audited — all in one transaction. **Return to
+   support** makes it `RETURNED` (`refunds.refund.returned`, no connector call). No route sets these
+   statuses directly.
+4. **Two approvers (over $2,000.00).** As Frank request a refund of, say, `2500.00`. As Carol the
+   inbox and the refund page now show **0 of 2 approvals**; the button reads **Confirm (more approvals
+   needed)**. Confirming records Carol's `ApprovalConfirmation`, audits `approval.step_confirmed`,
+   leaves the refund `PENDING_APPROVAL` with **no connector call**, and removes the request from
+   Carol's inbox (the refund page tells her it is waiting for another approver; a second confirm or a
+   return by Carol → 403). Sign in as `grace@example.com`: her inbox shows the request with
+   **1 of 2 approvals · confirmed by Carol Approver**. Grace's **Confirm and issue refund** issues it
+   (one `MockPaymentCall`, `refunds.refund.issued`, `approval.confirmed`, `decidedById` = Grace) and
+   the **Decision** panel lists both approvers. Had Grace chosen **Return to support**, the refund
+   would be `RETURNED` with no connector call. Exactly `2000.00` stays a single-approval refund.
+5. **Read-only roles.** `dan@example.com` (admin) and `erin@example.com` (auditor) see the dashboard
    and detail pages but no request form and no decide bar; `POST /api/refunds` and the decide route
    return 403 (`access.denied` in the audit log). Dan cannot decide refunds — `refunds.refund.decide`
    belongs to approvers only. Analysts (`alice`, `bob`) have no refunds permission at all: 403.
-5. **Audit.** In **Audit log** filter `entityType = refunds.refund` to see `refunds.refund.requested`,
+6. **Audit.** In **Audit log** filter `entityType = refunds.refund` to see `refunds.refund.requested`,
    `refunds.refund.issued`, `refunds.refund.returned` and `pii.reveal`, plus `approval.requested` /
-   `approval.confirmed` / `approval.returned` on the request and `access.denied` on denied routes.
+   `approval.step_confirmed` / `approval.confirmed` / `approval.returned` on the request and
+   `access.denied` on denied routes.
 
 ```bash
 # as frank:
@@ -316,6 +331,9 @@ curl -b frank "localhost:3000/api/refunds?status=PENDING_APPROVAL&minAmountCents
 # as carol:
 curl -b carol -X POST localhost:3000/api/approvals/<requestId>/decide -H 'content-type: application/json' \
   -d '{"decision":"confirm","note":"Verified with the customer"}'           # refund ISSUED, MockPaymentCall written
+# over $2,000.00 the same call as carol returns status PENDING with 1 confirmation; then as grace:
+curl -b grace -X POST localhost:3000/api/approvals/<requestId>/decide -H 'content-type: application/json' \
+  -d '{"decision":"confirm","note":"Second approval"}'                      # now ISSUED
 ```
 
 ## Production path
@@ -332,7 +350,7 @@ would be added:
 - Rate limiting (login and reveal endpoints in particular)
 - User-management UI (users are seeded only)
 - Data retention policies
-- Multi-step approvals (the engine supports exactly one decider per request)
+- Richer approval workflows (delegation, escalation, ordered approver chains) — the engine supports a required number of distinct confirmations per request (`requiredApprovals`), used by refunds over $2,000.00
 - A real payments provider behind `PaymentsConnector` (only the mock, which records calls in `MockPaymentCall`, exists)
 
 Also recommended: `secure` cookies are already enabled in production builds; put the app behind TLS,

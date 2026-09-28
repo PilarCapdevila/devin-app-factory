@@ -172,9 +172,31 @@ await withTransaction(async (tx) => {
 ```
 
 The engine enforces, for every action, that: the request is `PENDING`; the decider is not the
-requester; the decider has `decidePermission`; a decision note is present; exactly one decision is
-recorded (`decidedById`, `decidedAt`, `decisionNote`). Do **not** add a route that sets a final
-status directly.
+requester and has not already confirmed this request; the decider has `decidePermission`; a decision
+note is present. Each confirmation is recorded as an `ApprovalConfirmation`; the one that completes
+the request sets `decidedById`, `decidedAt` and `decisionNote` and runs `onConfirm`. Do **not** add a
+route that sets a final status directly.
+
+By default one confirmation is enough. If some requests need more than one approver, add the
+optional `requiredApprovals(request)` to the registration; it is evaluated at decision time from the
+stored request (usually its payload), so a rule change also covers requests that are already pending:
+
+```ts
+registerApprovalAction(VENDOR_DECISION_ACTION, {
+  decidePermission: "vendor.profile.decide",
+  requiredApprovals: (request) => (JSON.parse(request.payload) as { tier: string }).tier === "enterprise" ? 2 : 1,
+  async onConfirm(tx, request, decider) { /* runs once, after the last required confirmation */ },
+  async onReturn(tx, request, decider) { /* runs on the first return, at any step */ },
+});
+```
+
+While fewer than `requiredApprovals` different approvers have confirmed, the request stays `PENDING`,
+`onConfirm` is **not** called and the step is audited as `approval.step_confirmed`; the request leaves
+the confirming approver's inbox and stays in the others'. The final confirmation (or any return) is
+audited as `approval.confirmed` / `approval.returned` as usual. The inbox item and the request
+returned by the engine carry `requiredApprovals` and `confirmations`, so a detail page can show
+progress with `approvalProgressLabel(request)` from `@/platform/ui` ("1 of 2 approvals"). The refunds
+app uses this for amounts over $2,000.00 (`src/apps/refunds/register.ts`).
 
 Finally, add one import line to `src/apps/register.ts`:
 
@@ -253,7 +275,9 @@ Create `tests/unit/vendor.test.ts`. Tests run against a fresh, seeded `unit-test
 3. Recommending creates a `PENDING` approval request and sets `PENDING_APPROVAL`.
 4. Confirm → final status; return → back to `IN_REVIEW`; both write the expected audit events.
 5. Maker-checker through `decideApproval`: requester cannot decide; wrong permission is 403; a second
-   decision is rejected.
+   decision is rejected. If the action sets `requiredApprovals`: the intermediate step keeps the
+   request `PENDING` and does not run `onConfirm`; the same approver cannot confirm twice; the final
+   confirmation runs `onConfirm` once.
 6. Reveal of the app's PII fields through `revealField` (permission, reason length, scope, audit).
 7. Route-level behaviour with `secureHandler` if the app adds a non-trivial route (see
    `tests/unit/handler.test.ts` for the request helper pattern).

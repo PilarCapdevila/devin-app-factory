@@ -6,7 +6,7 @@ import type { SessionUser } from "@/platform/auth";
 import type { Tx } from "@/platform/db";
 import { ValidationError } from "@/platform/errors";
 import { registerPiiEntity } from "@/platform/pii";
-import { REFUND_ENTITY_TYPE, REFUND_ISSUE_ACTION } from "./types";
+import { REFUND_ENTITY_TYPE, REFUND_ISSUE_ACTION, requiredApprovalsForAmount, type RefundIssuePayload } from "./types";
 import { visibleWhere } from "./visibleWhere";
 
 async function pendingRefund(tx: Tx, request: ApprovalRequest): Promise<Refund> {
@@ -31,6 +31,11 @@ async function audit(tx: Tx, decider: SessionUser, action: string, before: Refun
 
 registerApprovalAction(REFUND_ISSUE_ACTION, {
   decidePermission: "refunds.refund.decide",
+  /** Read from the payload at decision time, so requests pending before the rule changed follow it too. */
+  requiredApprovals(request) {
+    const payload = JSON.parse(request.payload) as RefundIssuePayload;
+    return requiredApprovalsForAmount(payload.amountCents);
+  },
   /** The only code path that issues money: connector call and ISSUED status share the transaction. */
   async onConfirm(tx, request, decider) {
     const before = await pendingRefund(tx, request);
