@@ -1,0 +1,79 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// Roles: analyst | approver | admin | auditor (see src/platform/permissions.ts)
+model User {
+  id           String @id @default(cuid())
+  email        String @unique
+  name         String
+  role         String
+  passwordHash String
+
+  assignedCases    KycCase[]         @relation("AssignedCases")
+  approvalRequests ApprovalRequest[] @relation("RequestedApprovals")
+  approvalDecided  ApprovalRequest[] @relation("DecidedApprovals")
+}
+
+// Status: NEW | IN_REVIEW | PENDING_APPROVAL | APPROVED | REJECTED
+model KycCase {
+  id            String   @id @default(cuid())
+  applicantName String
+  dateOfBirth   String
+  nationalId    String
+  address       String
+  riskScore     Int
+  riskFlags     String // JSON array of strings
+  status        String   @default("NEW")
+  assignedToId  String?
+  assignedTo    User?    @relation("AssignedCases", fields: [assignedToId], references: [id])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([assignedToId])
+  @@index([status])
+}
+
+// Status: PENDING | CONFIRMED | RETURNED
+model ApprovalRequest {
+  id            String    @id @default(cuid())
+  entityType    String
+  entityId      String
+  action        String
+  payload       String // JSON
+  requestedById String
+  requestedBy   User      @relation("RequestedApprovals", fields: [requestedById], references: [id])
+  requestedAt   DateTime  @default(now())
+  requestNote   String
+  status        String    @default("PENDING")
+  decidedById   String?
+  decidedBy     User?     @relation("DecidedApprovals", fields: [decidedById], references: [id])
+  decidedAt     DateTime?
+  decisionNote  String?
+
+  @@index([status])
+  @@index([entityType, entityId])
+}
+
+// Append-only: triggers in prisma/migrations reject UPDATE and DELETE.
+model AuditEvent {
+  id         String   @id @default(cuid())
+  timestamp  DateTime @default(now())
+  actorId    String
+  actorRole  String
+  action     String
+  entityType String
+  entityId   String
+  before     String? // JSON
+  after      String? // JSON
+  reason     String?
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@index([action])
+}
