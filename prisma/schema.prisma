@@ -7,7 +7,7 @@ datasource db {
   provider = "sqlite"
 }
 
-// Roles: analyst | approver | admin | auditor (see src/platform/permissions.ts)
+// Roles: analyst | approver | admin | auditor | support_agent (see src/platform/permissions.ts)
 model User {
   id           String @id @default(cuid())
   email        String @unique
@@ -18,6 +18,7 @@ model User {
   assignedCases    KycCase[]         @relation("AssignedCases")
   approvalRequests ApprovalRequest[] @relation("RequestedApprovals")
   approvalDecided  ApprovalRequest[] @relation("DecidedApprovals")
+  requestedRefunds Refund[]          @relation("RequestedRefunds")
 }
 
 // Status: NEW | IN_REVIEW | PENDING_APPROVAL | APPROVED | REJECTED
@@ -76,4 +77,36 @@ model AuditEvent {
   @@index([entityType, entityId])
   @@index([actorId])
   @@index([action])
+}
+
+// Status: PENDING_APPROVAL | ISSUED | RETURNED (final statuses set only by the refunds.issue approval action)
+model Refund {
+  id            String    @id @default(cuid())
+  paymentId     String
+  customerName  String
+  customerEmail String // PII
+  cardLast4     String
+  amountCents   Int
+  currency      String
+  reason        String
+  status        String    @default("PENDING_APPROVAL")
+  requestedById String
+  requestedBy   User      @relation("RequestedRefunds", fields: [requestedById], references: [id])
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  issuedAt      DateTime?
+
+  @@index([status])
+  @@index([paymentId])
+  @@index([requestedById])
+}
+
+// Ledger of the mock payments connector (src/connectors/payments.ts): one row per issueRefund call.
+model MockPaymentCall {
+  id               String   @id @default(cuid())
+  paymentId        String
+  amountCents      Int
+  idempotencyKey   String   @unique
+  providerRefundId String
+  createdAt        DateTime @default(now())
 }

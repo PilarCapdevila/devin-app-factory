@@ -12,6 +12,7 @@ export const bob = () => userByEmail("bob@example.com");
 export const carol = () => userByEmail("carol@example.com");
 export const dan = () => userByEmail("dan@example.com");
 export const erin = () => userByEmail("erin@example.com");
+export const frank = () => userByEmail("frank@example.com");
 
 /** Creates an isolated case so tests do not depend on the seed's state machine positions. */
 export async function createCase(overrides: { status?: string; assignedToId?: string | null } = {}) {
@@ -35,4 +36,39 @@ export function jsonRequest(method: string, url: string, body?: unknown): Reques
     headers: body !== undefined ? { "content-type": "application/json" } : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+}
+
+/** Creates an isolated refund (with its approval request when pending) requested by frank. */
+export async function createRefund(overrides: { status?: string; paymentId?: string; amountCents?: number; withRequest?: boolean } = {}) {
+  const requester = await frank();
+  const status = overrides.status ?? "PENDING_APPROVAL";
+  const refund = await prisma.refund.create({
+    data: {
+      paymentId: overrides.paymentId ?? `pay_UNIT${Math.random().toString(36).slice(2, 10).toUpperCase()}`,
+      customerName: "Unit Test Customer (TEST)",
+      customerEmail: "unit.customer@example.com",
+      cardLast4: "4242",
+      amountCents: overrides.amountCents ?? 4999,
+      currency: "USD",
+      reason: "Unit test refund",
+      status,
+      requestedById: requester.id,
+      issuedAt: status === "ISSUED" ? new Date() : null,
+    },
+  });
+  const request =
+    overrides.withRequest === false
+      ? null
+      : await prisma.approvalRequest.create({
+          data: {
+            entityType: "refunds.refund",
+            entityId: refund.id,
+            action: "refunds.issue",
+            payload: JSON.stringify({ paymentId: refund.paymentId, amountCents: refund.amountCents, currency: refund.currency }),
+            requestedById: requester.id,
+            requestNote: "Unit test refund",
+            status: status === "ISSUED" ? "CONFIRMED" : status === "RETURNED" ? "RETURNED" : "PENDING",
+          },
+        });
+  return { refund, request };
 }

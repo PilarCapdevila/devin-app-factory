@@ -17,7 +17,7 @@ export function LoginForm() {
     setError(null);
     try {
       await api("/api/auth/login", { method: "POST", body: { email, password } });
-      router.push("/kyc");
+      router.push("/");
       router.refresh();
     } catch (e) {
       setError(e instanceof ApiError && e.status === 401 ? "Invalid email or password." : "Login failed.");

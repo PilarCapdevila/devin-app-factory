@@ -1,7 +1,13 @@
 import { requireUser } from "@/platform/auth";
-import { AppShell } from "@/platform/ui/AppShell";
+import { can } from "@/platform/permissions";
+import { AppShell, type NavItem } from "@/platform/ui/AppShell";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
-  return <AppShell user={user}>{children}</AppShell>;
+  const appNav: NavItem[] = [...(can(user, "refunds.refund.read") ? [{ href: "/refunds", label: "Refunds" }] : [])];
+  return (
+    <AppShell user={user} appNav={appNav}>
+      {children}
+    </AppShell>
+  );
 }
