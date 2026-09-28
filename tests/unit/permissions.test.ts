@@ -4,13 +4,13 @@ import { DECIDE_PERMISSIONS, ROLE_PERMISSIONS, ROLES, can, isRole } from "@/plat
 describe("permissions matrix (SPEC section 8)", () => {
   it("matches the spec exactly", () => {
     expect(ROLE_PERMISSIONS).toEqual({
-      analyst: ["kyc.case.read", "kyc.case.work", "pii.reveal"],
-      approver: ["kyc.case.read", "kyc.case.decide", "pii.reveal", "refunds.refund.read", "refunds.refund.decide"],
-      admin: ["kyc.case.read", "kyc.case.assign", "audit.read", "refunds.refund.read"],
-      auditor: ["kyc.case.read", "audit.read", "refunds.refund.read"],
+      analyst: ["kyc.case.read", "kyc.case.work", "pii.reveal", "disputes.dispute.read", "disputes.dispute.work"],
+      approver: ["kyc.case.read", "kyc.case.decide", "pii.reveal", "refunds.refund.read", "refunds.refund.decide", "disputes.dispute.read", "disputes.dispute.decide"],
+      admin: ["kyc.case.read", "kyc.case.assign", "audit.read", "refunds.refund.read", "disputes.dispute.read", "disputes.dispute.assign"],
+      auditor: ["kyc.case.read", "audit.read", "refunds.refund.read", "disputes.dispute.read"],
       support_agent: ["refunds.refund.read", "refunds.refund.request"],
     });
-    expect(DECIDE_PERMISSIONS).toEqual(["kyc.case.decide", "refunds.refund.decide"]);
+    expect(DECIDE_PERMISSIONS).toEqual(["kyc.case.decide", "refunds.refund.decide", "disputes.dispute.decide"]);
   });
 
   it("can() answers from the matrix only", () => {

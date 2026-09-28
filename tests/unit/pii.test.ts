@@ -6,7 +6,7 @@ import { alice, bob, createCase, dan } from "./helpers";
 
 describe("PII masking", () => {
   it("lists the global PII field names", () => {
-    expect(PII_FIELD_NAMES).toEqual(["dateOfBirth", "nationalId", "address", "customerEmail"]);
+    expect(PII_FIELD_NAMES).toEqual(["dateOfBirth", "nationalId", "address", "customerEmail", "cardholderName"]);
   });
 
   it("masks nationalId keeping the last 4 characters and everything else fully", () => {

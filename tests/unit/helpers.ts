@@ -38,6 +38,31 @@ export function jsonRequest(method: string, url: string, body?: unknown): Reques
   });
 }
 
+/** Creates an isolated dispute so tests do not depend on the seed's state machine positions. */
+export async function createDispute(
+  overrides: { status?: string; assignedToId?: string | null; respondBy?: Date; proposal?: string | null; evidenceSummary?: string | null } = {},
+) {
+  return prisma.dispute.create({
+    data: {
+      caseReference: `DSP-TEST-${Math.random().toString(36).slice(2, 10).toUpperCase()}`,
+      paymentReference: "pay_unittest0001",
+      amountCents: 12_345,
+      currency: "EUR",
+      paymentDate: new Date("2026-09-01T10:00:00Z"),
+      reasonCode: "not_recognised",
+      customerStatement: "I do not recognise this payment (TEST)",
+      cardholderName: "Unit Test Cardholder (TEST)",
+      cardLast4: "4242",
+      customerEmail: "unit-test-customer@example.com",
+      respondBy: overrides.respondBy ?? new Date(Date.now() + 10 * 24 * 60 * 60 * 1000),
+      status: overrides.status ?? "NEW",
+      assignedToId: overrides.assignedToId ?? null,
+      proposal: overrides.proposal ?? null,
+      evidenceSummary: overrides.evidenceSummary ?? null,
+    },
+  });
+}
+
 /** Creates an isolated refund (with its approval request when pending) requested by frank. */
 export async function createRefund(overrides: { status?: string; paymentId?: string; amountCents?: number; withRequest?: boolean } = {}) {
   const requester = await frank();

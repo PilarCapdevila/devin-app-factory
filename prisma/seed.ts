@@ -12,7 +12,7 @@ async function main() {
       return;
     }
     const result = await seedDatabase(prisma);
-    console.log(`Seeded ${Object.keys(result.users).length} users, ${result.caseCount} KYC cases and ${result.refundCount} refunds into ${url}.`);
+    console.log(`Seeded ${Object.keys(result.users).length} users, ${result.caseCount} KYC cases, ${result.refundCount} refunds and ${result.disputeCount} disputes into ${url}.`);
   } finally {
     await prisma.$disconnect();
   }

@@ -16,6 +16,7 @@ model User {
   passwordHash String
 
   assignedCases    KycCase[]         @relation("AssignedCases")
+  assignedDisputes Dispute[]         @relation("AssignedDisputes")
   approvalRequests ApprovalRequest[] @relation("RequestedApprovals")
   approvalDecided  ApprovalRequest[] @relation("DecidedApprovals")
   requestedRefunds Refund[]          @relation("RequestedRefunds")
@@ -38,6 +39,34 @@ model KycCase {
 
   @@index([assignedToId])
   @@index([status])
+}
+
+// Status: NEW | IN_REVIEW | PENDING_APPROVAL | ACCEPTED | CHALLENGED
+// Proposal: accept | fight (set by the analyst's proposal; the final status is set by the approvals engine)
+model Dispute {
+  id                String   @id @default(cuid())
+  caseReference     String   @unique
+  paymentReference  String
+  amountCents       Int
+  currency          String
+  paymentDate       DateTime
+  reasonCode        String
+  customerStatement String
+  cardholderName    String // PII
+  cardLast4         String
+  customerEmail     String // PII
+  respondBy         DateTime
+  status            String   @default("NEW")
+  proposal          String?
+  evidenceSummary   String?
+  assignedToId      String?
+  assignedTo        User?    @relation("AssignedDisputes", fields: [assignedToId], references: [id])
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([assignedToId])
+  @@index([status])
+  @@index([respondBy])
 }
 
 // Status: PENDING | CONFIRMED | RETURNED
