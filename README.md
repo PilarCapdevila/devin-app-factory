@@ -1,4 +1,3 @@
-# Internal tools platform + KYC Review Queue + Dispute Queue
 # Internal tools platform + KYC Review Queue + Refunds Dashboard
 
 A prototype of a secure internal-tools platform (the "app factory") and its apps: a KYC Review
